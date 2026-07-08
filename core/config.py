@@ -33,7 +33,11 @@ DAS_API_KEYS = {
     "Prod": os.getenv("DAS_API_KEY_PROD", ""),
 }
 
-# OpenAI Config
+import os
+from dotenv import load_dotenv
+
+load_dotenv(override=False)
+
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT") or os.getenv("azure_openai_endpoint", "")
 AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY") or os.getenv("azure_openai_key", "")
 AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION") or os.getenv("azure_openai_api_version", "2025-03-01-preview")

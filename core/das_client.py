@@ -21,18 +21,10 @@ async def das_send(user_input: str, conversation_id: str, user_email: str, indus
         "Content-Type": "application/json"
     }
     
-    timeout = httpx.Timeout(200.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            response = await client.post(api_url, json=payload, headers=headers)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as e:
-            print(f"[DAS API Error] {e}")
-            return {}
-        except json.JSONDecodeError as e:
-            print(f"[DAS Response Parse Error] {e}")
-            return {}
+    async with httpx.AsyncClient() as client:
+        response = await client.post(api_url, json=payload, headers=headers, timeout=600.0)
+        response.raise_for_status()
+        return response.json()
 
 async def das_end(conversation_id: str, user_email: str, industry: str, api_url: str, api_key: str) -> None:
     payload = build_payload("", conversation_id, user_email, industry, False, exit_das=True)

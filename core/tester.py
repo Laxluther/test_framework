@@ -12,28 +12,26 @@ def extract_requirements(reference: dict) -> list[str]:
     return [t["content"] for t in reference.get("turns", []) if t["role"] == "user"]
 
 def build_user_prompt(reference: dict, live_turns: list[dict], latest_agent_msg: str) -> str:
-    prompt = "REFERENCE CONVERSATION:\n"
-    for idx, t in enumerate(reference.get("turns", [])):
-        prompt += f"Turn {idx+1} [{t['role'].upper()}]: {t['content']}\n"
-        
-    prompt += "\nLIVE CONVERSATION SO FAR:\n"
-    if not live_turns:
-        prompt += "(none yet)\n"
-    else:
-        for idx, t in enumerate(live_turns):
-            prompt += f"Turn {idx+1} [{t['role'].upper()}]: {t['content']}\n"
-            
-    prompt += f"\nDAS AGENT'S LATEST MESSAGE:\n{latest_agent_msg}\n"
-    return prompt
+    req_block = str(reference.get("turns", []))
+    
+    live_lines = []
+    for t in live_turns:
+        label = "User" if t["role"] == "user" else "Agent"
+        live_lines.append(f"  {label}: {t['content']}")
+    live_block = "\n".join(live_lines) if live_lines else "  (conversation not yet started)"
+    
+    return (
+        f"EXTRACTED REQUIREMENTS (your only facts):\n{req_block}\n\n"
+        f"LIVE CONVERSATION SO FAR:\n{live_block}\n\n"
+        f"DAS AGENT'S LATEST MESSAGE:\n  {latest_agent_msg}\n\n"
+        f"Reply as the user."
+    )
 
 async def simulate_user_reply(simulator_agent, reference: dict, live_turns: list[dict], latest_agent_msg: str) -> str:
     prompt = build_user_prompt(reference, live_turns, latest_agent_msg)
-    try:
-        result = await Runner.run(simulator_agent, input=prompt)
-        return result.final_output.strip()
-    except Exception as e:
-        print(f"Simulator error: {e}")
-        return f"[Simulator Error] {e}"
+    result = await Runner.run(simulator_agent, input=prompt)
+    text = result.final_output
+    return text.strip() if text else "I don't have that information."
 
 async def run_test(
     conv_no: int,
@@ -70,30 +68,30 @@ async def run_test(
                 
             actual_turns.append({"role": "user", "content": user_input})
             
-            resp = await das_send(
-                user_input=user_input,
-                conversation_id=conversation_id,
-                user_email=user_email,
-                industry=industry,
-                is_new=(turn_no == 1),
-                api_url=api_url,
-                api_key=api_key
-            )
-            
-            if not resp:
-                error_msg = "DAS API failed to respond"
+            try:
+                resp = await das_send(
+                    user_input=user_input,
+                    conversation_id=conversation_id,
+                    user_email=user_email,
+                    industry=industry,
+                    is_new=(turn_no == 1),
+                    api_url=api_url,
+                    api_key=api_key
+                )
+            except Exception as e:
+                error_msg = f"DAS API error: {e}"
                 break
                 
-            agent_msg = resp.get("response", "")
+            agent_msg = resp.get("agentResponse", "")
             actual_turns.append({"role": "assistant", "content": agent_msg})
             
             if on_progress:
                 on_progress("agent_reply", {"conv_no": conv_no, "turn": turn_no, "agent_msg": agent_msg})
             
-            if resp.get("isAssumptionResponse") and resp.get("assumptionContent"):
+            if resp.get("isAssumptionResponse"):
                 assumption_turns.append({
                     "turnNo": turn_no,
-                    "assumptionText": resp.get("assumptionContent")
+                    "assumptionText": agent_msg
                 })
                 
             if resp.get("isAgentFlowComplete"):
@@ -102,7 +100,13 @@ async def run_test(
                 suggested_grades = resp.get("suggestedGrades", [])
                 break
                 
-            user_input = await simulate_user_reply(simulator_agent, reference, actual_turns, agent_msg)
+            try:
+                user_input = await simulate_user_reply(simulator_agent, reference, actual_turns, agent_msg)
+            except Exception as e:
+                import traceback
+                error_msg = f"Simulator agent error: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+                print("\n" + "="*60 + "\n" + error_msg + "\n" + "="*60)
+                break
             
     except Exception as e:
         error_msg = str(e)

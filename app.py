@@ -1,18 +1,29 @@
 import streamlit as st
 import asyncio
+import nest_asyncio
 import json
 from pathlib import Path
 import pandas as pd
 from main import run_single_test_async, run_all_tests_async, list_available_conversations, list_past_runs
-from core.config import DAS_ENVIRONMENTS
+from core.config import DAS_ENVIRONMENTS, AZURE_OPENAI_KEY, AZURE_OPENAI_API_VERSION, AZURE_OPENAI_ENDPOINT
 from core.db import get_past_runs, get_test_results_for_batch, update_test_result_override
 
 st.set_page_config(page_title="DAS Tester", page_icon="🧪", layout="wide")
 
+st.markdown("""
+<style>
+    .stProgress .st-bo { background-color: #8FD14F; }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; padding: 0 16px; background-color: transparent; }
+    .stTabs [aria-selected="true"] { border-bottom-color: #8FD14F !important; }
+    div[data-testid="stMetricValue"] { color: #2E4053; }
+</style>
+""", unsafe_allow_html=True)
+
+nest_asyncio.apply()
+
 def run_async(coroutine):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coroutine)
+    return asyncio.run(coroutine)
 
 st.title("Chemille DAS 2.0 Testing System")
 
@@ -79,23 +90,43 @@ with tabs[0]:
                 )
 
 with tabs[1]:
-    st.header("Past Runs Viewer (SQLite)")
+    st.header("Results Viewer")
     
     # 1. Fetch from DB instead of listing folders
     past_runs = get_past_runs()
     
     if not past_runs:
-        st.info("No full batch runs found in the database yet.")
+        st.info("No test sessions found in the database yet.")
     else:
-        # Convert to pandas dataframe for nice display
         df_runs = pd.DataFrame(past_runs)
-        st.subheader("Batch Run History")
-        st.dataframe(df_runs, use_container_width=True, hide_index=True)
+        if not df_runs.empty and 'timestamp' in df_runs.columns:
+            df_runs['timestamp'] = pd.to_datetime(df_runs['timestamp']).dt.strftime("%Y-%m-%d %H:%M:%S")
+            
+        df_batch = df_runs[df_runs['unique_convs'] > 1].copy() if not df_runs.empty else pd.DataFrame()
+        df_single = df_runs[df_runs['unique_convs'] <= 1].copy() if not df_runs.empty else pd.DataFrame()
         
-        selected_run_id = st.selectbox("Select a Batch Run ID to view details", [r['id'] for r in past_runs])
+        if not df_batch.empty:
+            st.subheader("Full Batch Runs")
+            st.dataframe(df_batch[['id', 'timestamp', 'das_env', 'total_iterations', 'grade_accuracy_avg', 'assumption_score_avg']], use_container_width=True, hide_index=True)
+            
+        if not df_single.empty:
+            st.subheader("Single Conversation Runs")
+            def get_status(row):
+                if not row['single_flow_completed']: return '❌ Flow Failed'
+                if row['single_grade_passed'] == 1: return '✅ Grade PASS'
+                if row['single_grade_passed'] == 0: return '🔴 Grade FAIL'
+                return '⚪ SKIP'
+                
+            df_single['Status'] = df_single.apply(get_status, axis=1)
+            display_cols = ['id', 'timestamp', 'das_env', 'single_app_name', 'total_iterations', 'Status', 'assumption_score_avg']
+            st.dataframe(df_single[display_cols].rename(columns={'single_app_name': 'application', 'total_iterations': 'rounds'}), use_container_width=True, hide_index=True)
+            
+        st.divider()
+        
+        selected_run_id = st.selectbox("Select a Session ID to view details", [r['id'] for r in past_runs])
         
         if selected_run_id:
-            st.subheader(f"Results for Batch ID {selected_run_id}")
+            st.subheader(f"Results for Session ID {selected_run_id}")
             results = get_test_results_for_batch(selected_run_id)
             
             if results:
@@ -155,13 +186,13 @@ with tabs[1]:
                 st.warning("No results found for this batch.")
 
 with tabs[2]:
-    st.header("Batch Overview Dashboard")
+    st.header("Run Overview Dashboard")
     
     past_runs = get_past_runs()
     if not past_runs:
         st.info("No runs available.")
     else:
-        selected_overview_id = st.selectbox("Select Batch Run", [r['id'] for r in past_runs], key="overview_batch")
+        selected_overview_id = st.selectbox("Select Test Session", [r['id'] for r in past_runs], key="overview_batch")
         if selected_overview_id:
             results = get_test_results_for_batch(selected_overview_id)
             if results:

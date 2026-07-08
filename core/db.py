@@ -158,9 +158,21 @@ def get_past_runs() -> List[Dict[str, Any]]:
     cursor = conn.cursor()
     
     cursor.execute('''
-        SELECT id, timestamp, das_env, total_iterations, grade_accuracy_avg, assumption_score_avg
-        FROM batch_runs
-        ORDER BY timestamp DESC
+        SELECT 
+            b.id, 
+            b.timestamp, 
+            b.das_env, 
+            b.total_iterations, 
+            b.grade_accuracy_avg, 
+            b.assumption_score_avg,
+            COUNT(DISTINCT t.conversation_no) as unique_convs,
+            MAX(t.grades_passed) as single_grade_passed,
+            MAX(t.flow_completed) as single_flow_completed,
+            MAX(t.application_name) as single_app_name
+        FROM batch_runs b
+        LEFT JOIN test_results t ON b.id = t.batch_id
+        GROUP BY b.id
+        ORDER BY b.timestamp DESC
     ''')
     
     runs = [dict(row) for row in cursor.fetchall()]

@@ -25,6 +25,7 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
     expected_grades = gt["grades"].get(conv_no, {}).get("expectedGrades", [])
     expected_ctqs = gt["assumptions"].get(conv_no, {}).get("expectedCTQs", [])
     
+    batch_id = create_batch_run(das_env, num_rounds)
     all_results = []
     
     for rnd in range(1, num_rounds + 1):
@@ -57,7 +58,7 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
         a_eval = result.get("assumptionEvaluation", {})
         
         insert_test_result(
-            batch_id=None,
+            batch_id=batch_id,
             das_env=das_env,
             round_no=rnd,
             conversation_id=result.get("conversationId", ""),
@@ -77,6 +78,7 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
             
         all_results.append(result)
         
+    update_batch_run_metrics(batch_id)
     generate_report(out_dir, out_dir / "consolidated_report.xlsx")
     return out_dir
 
