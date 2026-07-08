@@ -1,0 +1,232 @@
+[
+  {
+    "conversationNo": 1,
+    "application": "UTH Automotive Connector",
+    "industry": "Automotive & Transportation",
+    "expectedCTQs": [
+      "Continuous Service Temperature of 150C",
+      "Fuel and Oil Resistant",
+      "Tough"
+    ]
+  },
+  {
+    "conversationNo": 2,
+    "application": "Circuit Breaker Bobbin",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "Dimensional stability",
+      "Wall thickness of 0.4mm",
+      "Temperatures up to 180 C",
+      "Low warp",
+      "V0",
+      "EIS listing UL"
+    ]
+  },
+  {
+    "conversationNo": 3,
+    "application": "BTB connector",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "V0 at 0.4mm",
+      "Flowability",
+      "Dimensional stability",
+      "SMT",
+      "Moisture absorption"
+    ]
+  },
+  {
+    "conversationNo": 4,
+    "application": "CCM Fixed Focus",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "Ultra high dimensional stability",
+      "Very thin walls",
+      "High flow to fill many mold cavities",
+      "Good weldline strength",
+      "Adhesion to metal"
+    ]
+  },
+  {
+    "conversationNo": 5,
+    "application": "Appliance Connector",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "GWT 750°C",
+      "No flame"
+    ]
+  },
+  {
+    "conversationNo": 6,
+    "application": "Fuse Switch",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "GWFI 960"
+    ]
+  },
+  {
+    "conversationNo": 7,
+    "application": "Radome",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "Low dielectric constant (dK)",
+      "Low dissipation factor (df)",
+      "UV resistant",
+      "Weathering resistant (f1 on UL)",
+      "High dimensional stability",
+      "Moisture resistant",
+      "Thickness 1.0mm"
+    ]
+  },
+  {
+    "conversationNo": 8,
+    "application": "HV Connector in wire harness",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "Halogen free",
+      "V0 at 0.8mm",
+      "CTI of PLC 0"
+    ]
+  },
+  {
+    "conversationNo": 9,
+    "application": "Controller Seal",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "Shore 50 hardness",
+      "Good bonding with nylon",
+      "Chemical resistance versus adhesives and water",
+      "Low creep",
+      "High flow"
+    ]
+  },
+  {
+    "conversationNo": 10,
+    "application": "Terminal Block",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "Halogen free",
+      "V0 at 0.5mm",
+      "UL 1059",
+      "Service temps up to 130 C",
+      "CTI of PLC 0"
+    ]
+  },
+  {
+    "conversationNo": 11,
+    "application": "Switch Housing Cover",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "V0 at 0.8mm",
+      "Good mechanicals",
+      "Laser markable",
+      "Halogen free"
+    ]
+  },
+  {
+    "conversationNo": 12,
+    "application": "Optical Cable - tight buffer",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "Broad operating temperature range (-40°C to 125°C)",
+      "Low Coefficient of Linear Thermal Expansion (CLTE)",
+      "Thin wall extrusion capability",
+      "Easy peel (optional for HTR8351)",
+      "Translucency (optional for HTR6108)"
+    ]
+  },
+  {
+    "conversationNo": 13,
+    "application": "Optical Cable - loose tube",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "High speed extrusion",
+      "Thin wall extrusion",
+      "High stiffness (2000-2500 MPa)",
+      "Low wear / low COF",
+      "Low Coefficient of Linear Thermal Expansion (CLTE)",
+      "FR and/or UV stabilized (optional for CRAST830FRUV)"
+    ]
+  },
+  {
+    "conversationNo": 14,
+    "application": "Type C Connector",
+    "industry": "Electrical & Electronics",
+    "applicationNote": "mobile phones/home hubs",
+    "expectedCTQs": [
+      "SMT",
+      "V0 at 0.4mm",
+      "Toughness"
+    ]
+  },
+  {
+    "conversationNo": 15,
+    "application": "RCBO",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "Glow Wire Flammability Index 960°C",
+      "Minimum Thickness 0.8mm",
+      "Comparative Tracking Index (CTI) 600V",
+      "Glass Fiber 25%",
+      "REACH",
+      "Flammability Classification V-0",
+      "GWFI 960 (or 850 in some cases)"
+    ]
+  },
+  {
+    "conversationNo": 16,
+    "application": "DDR Connector",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "SMT",
+      "Wall thickness of 0.4mm",
+      "50mm flow length",
+      "Toughness"
+    ]
+  },
+  {
+    "conversationNo": 17,
+    "application": "CPU Sockets",
+    "industry": "Electrical & Electronics",
+    "expectedCTQs": [
+      "Ultrahigh warp resistance",
+      "Ultrahigh flow",
+      "V0 at 0.4mm",
+      "Dimensional stability"
+    ]
+  },
+  {
+    "conversationNo": 18,
+    "application": "Rogowski Sensor",
+    "industry": "Electrical & Electronics",
+    "applicationNote": "jacket",
+    "expectedCTQs": [
+      "Halogen-free FR",
+      "UL94 V0 at 1.6mm",
+      "Shore A hardness 80"
+    ]
+  },
+  {
+    "conversationNo": 19,
+    "application": "Battery Cover",
+    "industry": "Electrical & Electronics",
+    "applicationNote": "cover for 100mAh Li-ion battery in a PC",
+    "expectedCTQs": [
+      "Thickness 1.5mm",
+      "HDT of 150°C",
+      "Vicat softening temperature > 150°C"
+    ]
+  },
+  {
+    "conversationNo": 20,
+    "application": "Cable Gland",
+    "industry": "Electrical & Electronics",
+    "applicationNote": "main body, industrial, outdoors",
+    "expectedCTQs": [
+      "UV stabilization (nice-to-have)",
+      "Unfilled",
+      "UL94 V2 at 0.8mm",
+      "Injection molding",
+      "Outdoor use"
+    ]
+  }
+]

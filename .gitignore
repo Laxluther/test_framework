@@ -1,0 +1,17 @@
+# Environment files
+.env
+.env.*
+*.env
+.venv/
+venv/
+ENV/
+env/
+results/
+# Directories
+uat/
+uth/
+qa/
+old_result/
+newModel/
+new/
+dev/

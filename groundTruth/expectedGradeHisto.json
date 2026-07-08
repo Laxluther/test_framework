@@ -1,0 +1,208 @@
+[
+  {
+    "conversationNo": 1,
+    "application": "UTH Automotive Connector",
+    "expectedGrades": [
+      "Zytel 70G35EF",
+      "Zytel PLS90G35",
+      "Zytel HTN51G35EF",
+      "Zytel® 70G30REF",
+      "CELANEX 3300-2",
+      "CELANEX 3300D",
+      "FORTRON 1140L4",
+      "VECTRA E130i",
+      "VECTRA S135",
+      "VECTRA S471",
+      "Other HTNs should be passed.HTN grades are those grades for which in code HTN is present."
+    ]
+  },
+  {
+    "conversationNo": 2,
+    "application": "Circuit Breaker Bobbin",
+    "expectedGrades": ["Zytel® FR70G30V0NH NC010",
+    "FRIANYL A3 GF30 V0 GY 7035",
+    "FRIANYL A3 RV0 BK 9005/JJ",
+    "VECTRA E130I" ,
+    "Zytel® FR70G30V0NH GY199", 
+    "CELANEX® XFR 6852 GF30 (PBT, ~26% GF, non-halogenated FR)", 
+    "CELANEX® XFR 6852 GF30", 
+    "Rynite FR530", 
+    "Zytel FR95G25V0NH", 
+    "Rynite FR533NH"]
+  },
+  {
+    "conversationNo": 3,
+    "application": "BTB connector",
+    "expectedGrades": [
+      "VECTRA S475",
+      "VECTRA E471I",
+      "Vectra E130I"
+    ]
+  },
+  {
+    "conversationNo": 4,
+    "application": "CCM Fixed Focus",
+    "expectedGrades": [
+      "VECTRA® A725",
+      "VECTRA® A700",
+      "Zenite SEA30B",
+      "Zenite SEA60B"
+    ]
+  },
+  {
+    "conversationNo": 5,
+    "application": "Appliance Connector",
+    "expectedGrades": [
+      "FRIANYL® A3 GF25 V0XI NC 1101/L",
+      "FRIANYL® A3 GF25 V0XI NC 1101/LA",
+      "Frianyl A3 VOXI",
+      "Crastin T841FR",
+      "Crastin T843FR",
+      "Zytel FR70G25V0GWNH"
+    ]
+  },
+  {
+    "conversationNo": 6,
+    "application": "Fuse Switch",
+    "expectedGrades": [
+      "FRIANYL® B3 GF30 V2",
+      "THERMX® CG933",
+      "PA66 option (either NHFR or hal-FR) such as Frianyl A3 GF30 V0 and/or Zytel FR50"
+    ]
+  },
+  {
+    "conversationNo": 7,
+    "application": "Radome",
+    "expectedGrades": [
+      "Rynite 530",
+      "Fortron 1140L4",
+      "Crastin HR5330HFS"
+    ]
+  },
+  {
+    "conversationNo": 8,
+    "application": "HV Connector",
+    "expectedGrades": [
+      "HB = Zytel 70G35EF (or GF30); Crastin HR5330HFS;/ V0= Frianyl A3 GF30 V0; Crastin FRHR5325NH Zytel plus Zytel PLS95G35 Zytel FR95G25V0NH",
+      "FRIANYL A3 GF25 V0 OR 2003/A",
+    "ZENITE 5130L"
+    ]
+  },
+  {
+    "conversationNo": 9,
+    "application": "Controller Seal",
+    "expectedGrades": [
+      "SANTOPRENE® 191-55 PA",
+      "SANTOPRENE® 8211-45",
+      "SANTOPRENE® 111-45",
+      "SANTOPRENE® 211-45",
+      "SANTOPRENE® 8201-50W185",
+      "SANTOPRENE® 191-70 PA"
+    ]
+  },
+  {
+    "conversationNo": 10,
+    "application": "Terminal Block",
+    "expectedGrades": [
+      "Zytel® HTNFR52G30NH NC010",
+      "FRIANYL A3 RV0 NC 1102",
+      "FRIANYL A3 GF25 V0",
+      "FRIANYL A3 GF30 V0 GY 7035",
+      "CELANEX XFR 6842 GF10",
+      "CELANEX XFR 6842 GF30",
+      "CELANEX XFR 4840"
+    ]
+  },
+  {
+    "conversationNo": 11,
+    "application": "Switch Housing Cover",
+    "expectedGrades": [
+      "Frianyl B3 GF30 V2",
+      "Zytel FR70G25V0GWNH",
+      "Frianyl A3 GF25 V0"
+    ]
+  },
+  {
+    "conversationNo": 12,
+    "application": "Optical Cable - Buffer",
+    "expectedGrades": [
+      "Hytrel 5556",
+      "Hytrel 6356",
+      "Hytrel 7246",
+      "Hytrel 8238",
+      "Hytrel HTR8351",
+      "Hytrel HTR6108"
+    ]
+  },
+  {
+    "conversationNo": 13,
+    "application": "Optical Cable - Ferrule",
+    "expectedGrades": [
+      "Crastin 6129",
+      "Crastin S600F10",
+      "Crastin ST830FRUV"
+    ]
+  },
+  {
+    "conversationNo": 14,
+    "application": "Type C Connector",
+    "expectedGrades": [
+      "Zytel HTNFR52G30NH",
+      "Zytel HTNFR42G30NH"
+    ]
+  },
+  {
+    "conversationNo": 15,
+    "application": "RCBO",
+    "expectedGrades": [
+      "Zytel® HTNFR42G30NH NC010",
+      "Zytel® HTNFR42G30NH BK337",
+      "Zytel® HTNFR52G35NHF BK337",
+      "ZYTFR70G30V0NH",
+      "Frianyl® A3 GF25 V0"
+    ]
+  },
+  {
+    "conversationNo": 16,
+    "application": "DDR Connector",
+    "expectedGrades": [
+      "Zytel HTNFR52G30NH",
+      "Zytel HTNFR42G30NH",
+      "Zytel HTNFR52G35HNF"
+    ]
+  },
+  {
+    "conversationNo": 17,
+    "application": "CPU Sockets",
+    "expectedGrades": [
+      "Zenite 5145L"
+    ]
+  },
+  {
+    "conversationNo": 18,
+    "application": "Rogowski Sensor",
+    "expectedGrades": [
+      "Hytrel® HTR8813 BK320",
+      "Santoprene 251-90 HF",
+      "Santoprene 253-40 HF"
+    ]
+  },
+  {
+    "conversationNo": 19,
+    "application": "Battery Cover",
+    "expectedGrades": [
+      "VECTRA® E130i",
+      "Frianyl A3 GF25 V0",
+      "Zytel HTNFR52G30GWNH",
+      "Vectra E488i"
+    ]
+  },
+  {
+    "conversationNo": 20,
+    "application": "Cable Gland",
+    "expectedGrades": [
+      "FRIANYL® A3 V2 P"
+    ]
+  }
+]
+

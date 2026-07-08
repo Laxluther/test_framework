@@ -1,0 +1,187 @@
+[
+  {
+    "conversationNo": 1,
+    "application": "UTH Automotive Connector",
+    "Grades": [
+      "Fortron® 1140L4"
+    ]
+  },
+  {
+    "conversationNo": 2,
+    "application": "Circuit Breaker Bobbin",
+    "Grades": [
+      "Frianyl® A3 RV0 BK 9005/JJ",
+      "Vectra® E130i"
+    ]
+  },
+  {
+    "conversationNo": 3,
+    "application": "BTB connector",
+    "Grades": [
+      "VECTRA S475",
+      "VECTRA E471I",
+      "Vectra® E130i",
+      "Zytel® HTNFR52G30NH BK337",
+      "Thermx® CG933",
+      "Vectra® A130",
+      "Vectra® E463I",
+      "Vectra® E473I",
+      "Vectra® FIT50",
+      "Zenite® 6130L",
+      "Zytel® HTNFR52G30NH NC010",
+      "Zytel® HTNFR52G30NH NC010"
+
+    ]
+  },
+  {
+    "conversationNo": 4,
+    "application": "CCM Fixed Focus",
+    "Grades": [
+      "Zenite SEA10N",
+      "Zenite SEA30B",
+      "Zenite SEA10B",
+      "Zenite SEA20N",
+      "Vectra® E463I",
+      "Zenite SEA60B",
+      "Vectra® A115",
+      "Vectra® E840i LDS"
+    ]
+  },
+  {
+    "conversationNo": 5,
+    "application": "Appliance Connector",
+    "Grades": [
+      "FRIANYL® A3 GF25 V0XI NC 1101/L"
+    ]
+  },
+  {
+    "conversationNo": 6,
+    "application": "Fuse Switch",
+    "Grades": [
+    
+    ]
+  },
+  {
+    "conversationNo": 7,
+    "application": "Radome",
+    "Grades": [
+      "GUR® 4130 C",
+      "Vectra® E830IPD",
+      "Zytel® 70G30HSLR BK099"
+    ]
+  },
+  {
+    "conversationNo": 8,
+    "application": "HV Connector",
+    "Grades": [
+      "Frianyl® A3 GF25 V0 BK 9005",
+      "Zytel® HTNFR52G35NHF BK337",
+      "Crastin® FR685NH1 OR162",
+      "Crastin® FR685NH1 BK591LM"
+    ]
+  },
+  {
+    "conversationNo": 9,
+    "application": "Controller Seal",
+    "Grades": [
+    ]
+  },
+  {
+    "conversationNo": 10,
+    "application": "Terminal Block",
+    "Grades": [
+        "Zytel® HTNFR520NH BK337",
+        "Frianyl® A3 RV0",
+        "Frianyl® A3 GF25 V0",
+        "Frianyl® A3 RV0 BK 9011/O",
+        "Frianyl® A3 RV0 GY 7004/R",
+        "Frianyl® A3 RV0 BK 9005",
+        "Frianyl® A3 RV0 BG 1001/B"
+    ]
+  },
+  {
+    "conversationNo": 11,
+    "application": "Switch Housing Cover",
+    "Grades": [
+
+    ]
+  },
+  {
+    "conversationNo": 12,
+    "application": "Optical Cable - Buffer",
+    "Grades": [
+      "Hytrel® 7246",
+      "Celanex® 2001"
+    ]
+  },
+  {
+    "conversationNo": 13,
+    "application": "Optical Cable - Ferrule",
+    "Grades": ["Hytrel® HTR8351 NC021"]
+  },
+  {
+    "conversationNo": 14,
+    "application": "Type C Connector",
+    "Grades": [
+      "VECTRA E130i",
+      "Zytel® HTNFR52G35NHF BK337"
+    ]
+  },
+  {
+    "conversationNo": 15,
+    "application": "RCBO",
+    "Grades": [
+      "Frianyl B3 GF30 V2",
+      "Fortron® 6165A4",
+      "Frianyl A3 GF25 V0"
+    ]
+  },
+  {
+    "conversationNo": 16,
+    "application": "DDR Connector",
+    "Grades": [
+      "Vectra® E488I"
+    ]
+  },
+  {
+    "conversationNo": 17,
+    "application": "CPU Sockets",
+    "Grades": [
+      "Vectra® FIT30",
+      "Zenite 5145L"
+    ]
+  },
+  {
+    "conversationNo": 18,
+    "application": "Rogowski Sensor",
+    "Grades": [
+    ]
+  },
+  {
+    "conversationNo": 19,
+    "application": "Battery Cover",
+    "Grades": [
+    ]
+  },
+  {
+    "conversationNo": 20,
+    "application": "Cable Gland",
+    "Grades": [
+      "Frianyl® A3 W V2",
+      "Frianyl® B3 V0 BK 9005/O",
+      "Frianyl® A3 W V2 BK 9005/U",
+      "Frianyl® B3 NH V2 BK 9005/U",
+      "Frianyl® B3 NH V2 NC 1102",
+      "Frianyl® B3 V0",
+      "Frianyl® B3 V2",
+      "Frianyl® B3 V2 BK 9005/L",
+      "Fortron® 1140L4",
+      "Frianyl® A3 GF30 V0",
+      "Celanyl® A3 HH J10 GF13 NC 1102/E",
+       "Celanyl® B3 J GF15 NC 1102",
+       "Frianyl® B3 V0 OR 2003/J"
+
+
+    ]
+  }
+]
