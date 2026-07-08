@@ -3,12 +3,15 @@ import json
 
 def build_payload(user_input: str, conversation_id: str, user_email: str, industry: str, is_new: bool, exit_das=False) -> dict:
     return {
-        "userInput": user_input,
+        "userProfile":       {"userScope": "Internal", "email": user_email, "region": "APAC"},
+        "conversationId":    conversation_id,
+        "input":             user_input,
+        "nerOutput":         {},
+        "industry":          industry,
         "isNewConversation": is_new,
-        "userEmail": user_email,
-        "industry": industry,
-        "conversationId": conversation_id,
-        "exitDAS": exit_das,
+        "userExitDas":       exit_das,
+        "feedbackFlow":      False,
+        "feedback":          {},
     }
 
 async def das_send(user_input: str, conversation_id: str, user_email: str, industry: str, is_new: bool, api_url: str, api_key: str) -> dict:
@@ -33,6 +36,11 @@ async def das_send(user_input: str, conversation_id: str, user_email: str, indus
 
 async def das_end(conversation_id: str, user_email: str, industry: str, api_url: str, api_key: str) -> None:
     payload = build_payload("", conversation_id, user_email, industry, False, exit_das=True)
+    payload["feedback"] = {
+        "conversationQuality": "automated_test",
+        "genericFeedback":     "Automated test run — LLM Eval",
+        "industryFeedback": "", "marketSegmentFeedback": "", "conversationFeedback": "",
+    }
     headers = {
         "Ocp-Apim-Subscription-Key": api_key,
         "Content-Type": "application/json"

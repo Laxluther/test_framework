@@ -121,7 +121,7 @@ async def run_test(
         assumption_eval = {}
         
     if on_progress:
-        on_progress("completed", {"conv_no": conv_no, "success": success})
+        on_progress("completed", {"conv_no": conv_no, "success": success, "error": error_msg})
         
     return {
         "conversationNo": conv_no,

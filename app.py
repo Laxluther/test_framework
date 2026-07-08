@@ -1,6 +1,7 @@
 import streamlit as st
 import asyncio
 import json
+from pathlib import Path
 import pandas as pd
 from main import run_single_test_async, run_all_tests_async, list_available_conversations, list_past_runs
 from core.config import DAS_ENVIRONMENTS
@@ -54,7 +55,11 @@ with tabs[0]:
             elif event_type == "evaluating":
                 status_text.text(f"Evaluating results for Conv {data['conv_no']}...")
             elif event_type == "completed":
-                status_text.text(f"Completed Conv {data['conv_no']}. Success: {data['success']}")
+                if data['success']:
+                    status_text.success(f"✅ Completed Conv {data['conv_no']}.")
+                else:
+                    err = data.get('error') or 'Max turns reached or API failure'
+                    status_text.error(f"❌ Failed Conv {data['conv_no']}. Flow did not complete. Reason: {err}")
 
         with st.spinner("Running tests..."):
             if test_mode == "Single Conversation" and selected_conv:
