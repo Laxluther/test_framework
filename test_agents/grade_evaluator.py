@@ -1,5 +1,5 @@
 from agents import Agent, ModelSettings, OpenAIChatCompletionsModel
-from core.config import PRIMARY_REASONING_MODEL, get_openai_client
+from core.config import PRIMARY_REASONING_MODEL, OPENAI_CLIENT
 
 EVALUATOR_PROMPT = """\
 You are a polymer grade evaluation judge for Celanese DAS testing.
@@ -43,19 +43,18 @@ OUTPUT FORMAT — respond with ONLY valid JSON, nothing else:
 }
 """
 
-def create_grade_evaluator() -> Agent:
-    return Agent(
-        name="grade_evaluator",
-        instructions=EVALUATOR_PROMPT,
-        model=OpenAIChatCompletionsModel(
-            model=PRIMARY_REASONING_MODEL,
-            openai_client=get_openai_client(),
-        ),
-        model_settings=ModelSettings(
-            max_completion_tokens=4000,
-            frequency_penalty=0,
-            presence_penalty=0,
-            seed=42,
-            reasoning={"effort": None}
-        )
+grade_evaluator_agent = Agent(
+    name="grade_evaluator",
+    instructions=EVALUATOR_PROMPT,
+    model=OpenAIChatCompletionsModel(
+        model=PRIMARY_REASONING_MODEL,
+        openai_client=OPENAI_CLIENT,
+    ),
+    model_settings=ModelSettings(
+        max_completion_tokens=4000,
+        frequency_penalty=0,
+        presence_penalty=0,
+        seed=42,
+        reasoning={"effort": None}
     )
+)

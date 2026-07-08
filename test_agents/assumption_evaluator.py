@@ -1,5 +1,5 @@
 from agents import Agent, ModelSettings, OpenAIChatCompletionsModel
-from core.config import ASSUMPTION_EVAL_MODEL, get_openai_client
+from core.config import ASSUMPTION_EVAL_MODEL, OPENAI_CLIENT
 
 ASSUMPTION_EVALUATOR_PROMPT = """\
 You are a strict CTQ (Critical-To-Quality) evaluator for Celanese DAS Assumption testing.
@@ -83,19 +83,18 @@ passed       = true  if overallScore >= 5.0
 overallScore = (len(matchedCTQs) / len(expectedCTQs)) * 10  — rounded to 1 decimal
 """
 
-def create_assumption_evaluator() -> Agent:
-    return Agent(
-        name="assumption_evaluator",
-        instructions=ASSUMPTION_EVALUATOR_PROMPT,
-        model=OpenAIChatCompletionsModel(
-            model=ASSUMPTION_EVAL_MODEL,
-            openai_client=get_openai_client(),
-        ),
-        model_settings=ModelSettings(
-            max_completion_tokens=4000,
-            temperature=0,
-            frequency_penalty=0,
-            presence_penalty=0,
-            seed=42,
-        )
+assumption_evaluator_agent = Agent(
+    name="assumption_evaluator",
+    instructions=ASSUMPTION_EVALUATOR_PROMPT,
+    model=OpenAIChatCompletionsModel(
+        model=ASSUMPTION_EVAL_MODEL,
+        openai_client=OPENAI_CLIENT,
+    ),
+    model_settings=ModelSettings(
+        max_completion_tokens=4000,
+        frequency_penalty=0,
+        presence_penalty=0,
+        seed=42,
+        reasoning={"effort": None}
     )
+)

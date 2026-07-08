@@ -8,7 +8,7 @@ from core.loader import collect_test_files, extract_conversation_no, load_conver
 from core.tester import run_test
 from core.reporter import generate_report
 from core.db import create_batch_run, update_batch_run_metrics, insert_test_result
-from test_agents import create_simulator_agent, create_grade_evaluator, create_assumption_evaluator
+from test_agents import simulator_agent, grade_evaluator_agent, assumption_evaluator_agent
 
 async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: bool, das_env: str, on_progress=None):
     api_url = DAS_ENVIRONMENTS.get(das_env, DAS_ENVIRONMENTS["Local"])
@@ -24,10 +24,6 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
     
     expected_grades = gt["grades"].get(conv_no, {}).get("expectedGrades", [])
     expected_ctqs = gt["assumptions"].get(conv_no, {}).get("expectedCTQs", [])
-    
-    simulator_agent = create_simulator_agent()
-    grade_evaluator_agent = create_grade_evaluator()
-    assumption_evaluator_agent = create_assumption_evaluator()
     
     all_results = []
     
@@ -94,10 +90,6 @@ async def run_all_tests_async(num_rounds: int, use_llm_eval: bool, das_env: str,
     
     gt = load_all_ground_truth(DEFAULT_GRADES_FILE, DEFAULT_ASSUMPTIONS_FILE)
     test_files = collect_test_files(CONVERSATION_FOLDER)
-    
-    simulator_agent = create_simulator_agent()
-    grade_evaluator_agent = create_grade_evaluator()
-    assumption_evaluator_agent = create_assumption_evaluator()
     
     batch_id = create_batch_run(das_env, num_rounds)
     

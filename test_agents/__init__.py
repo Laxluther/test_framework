@@ -2,8 +2,8 @@
 Agent module exposing functions to create user simulator and evaluator agents.
 """
 
-from .simulator import create_simulator_agent
-from .grade_evaluator import create_grade_evaluator
-from .assumption_evaluator import create_assumption_evaluator
+from .simulator import simulator_agent
+from .grade_evaluator import grade_evaluator_agent
+from .assumption_evaluator import assumption_evaluator_agent
 
-__all__ = ["create_simulator_agent", "create_grade_evaluator", "create_assumption_evaluator"]
+__all__ = ["simulator_agent", "grade_evaluator_agent", "assumption_evaluator_agent"]

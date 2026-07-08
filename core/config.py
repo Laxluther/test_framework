@@ -41,9 +41,8 @@ AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION") or os.getenv("a
 PRIMARY_REASONING_MODEL = os.getenv("PRIMARY_REASONING_LLM_MODEL", "aif-gpt-5-4-das-d-ussc-01")
 ASSUMPTION_EVAL_MODEL = os.getenv("AZURE_OPENAI_DEPLOYMENT", "aif-gpt-4-1-das-d-ussc-01")
 
-def get_openai_client() -> AsyncAzureOpenAI:
-    return AsyncAzureOpenAI(
-        api_key=AZURE_OPENAI_KEY,
-        api_version=AZURE_OPENAI_API_VERSION,
-        azure_endpoint=AZURE_OPENAI_ENDPOINT,
-    )
+OPENAI_CLIENT = AsyncAzureOpenAI(
+    api_key=AZURE_OPENAI_KEY,
+    api_version=AZURE_OPENAI_API_VERSION,
+    azure_endpoint=AZURE_OPENAI_ENDPOINT,
+)
