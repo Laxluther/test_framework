@@ -46,7 +46,7 @@ async def run_test(
     use_llm_eval: bool = True,
     on_progress = None
 ) -> dict:
-    app_name = reference.get("application", f"App_{conv_no}")
+    app_name = reference.get("application", reference.get("filename", f"Conversation_{conv_no}.json"))
     industry = reference.get("industry", DEFAULT_INDUSTRY)
     user_email = reference.get("user_email", DEFAULT_EMAIL)
     conversation_id = str(uuid.uuid4())
@@ -125,7 +125,19 @@ async def run_test(
         assumption_eval = {}
         
     if on_progress:
-        on_progress("completed", {"conv_no": conv_no, "success": success, "error": error_msg})
+        on_progress("completed", {
+            "conv_no": conv_no,
+            "application": app_name,
+            "conv_file": reference.get("filename", ""),
+            "success": success,
+            "error": error_msg,
+            "flow_completed": flow_completed,
+            "grades_passed": grade_eval.get("passed"),
+            "assumptions_score": assumption_eval.get("overallScore"),
+            "expected_grades": expected_grades,
+            "suggested_grades": [g.get("gradeName", str(g)) if isinstance(g, dict) else str(g) for g in suggested_grades],
+            "grades_matched_count": grade_eval.get("totalMatched", 0),
+        })
         
     return {
         "conversationNo": conv_no,

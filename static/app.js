@@ -170,10 +170,13 @@
     const sel = el('single-conversation');
     if (!sel) return;
     sel.innerHTML = '<option value="">Select conversation…</option>';
-    (state.config.conversations || []).forEach(c => {
+    const convs = (state.config.conversations || []).slice();
+    // Natural sort by conv_no (numeric) so conv 1 < 2 < 10
+    convs.sort((a, b) => (a.conv_no || 0) - (b.conv_no || 0));
+    convs.forEach(c => {
       const opt = document.createElement('option');
       opt.value = c.filename;
-      opt.textContent = (c.application || c.filename) + ' (Conv #' + c.conv_no + ')';
+      opt.textContent = c.filename;
       sel.appendChild(opt);
     });
   }
@@ -235,6 +238,9 @@
   ---------------------------------------------------------- */
   function initSingleRun() {
     on('single-run-btn', 'click', startSingleRun);
+    on('single-stop-btn', 'click', async () => {
+      try { await api('/api/run/stop', { method: 'POST' }); showToast('Stop requested', 'success'); } catch { }
+    });
   }
 
   async function startSingleRun() {
@@ -247,6 +253,7 @@
     const btn = el('single-run-btn');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Running…';
+    show(el('single-stop-btn'));
 
     const logArea = el('single-log');
     logArea.innerHTML = '';
@@ -321,10 +328,11 @@
     const card = el('single-result-card');
     const header = card.querySelector('.result-card-header');
     const stats = card.querySelector('.result-stats');
+    const details = el('single-result-details');
     header.innerHTML = '';
     const badge = d.success ? createBadge('pass', 'PASS') : createBadge('fail', 'FAIL');
     const h4 = document.createElement('h4');
-    h4.textContent = d.application || 'Result';
+    h4.textContent = d.application || d.conv_file || 'Result';
     header.appendChild(badge);
     header.appendChild(h4);
     stats.innerHTML = '';
@@ -333,6 +341,22 @@
     }
     if (d.assumptions_score !== undefined) {
       stats.innerHTML += '<div class="stat-item"><span class="stat-label">Assumption Score</span><span class="stat-value">' + scoreDisplay(d.assumptions_score) + '</span></div>';
+    }
+    if (d.flow_completed !== undefined) {
+      stats.innerHTML += '<div class="stat-item"><span class="stat-label">Flow</span><span class="stat-value ' + (d.flow_completed ? 'pass' : 'fail') + '">' + (d.flow_completed ? 'Completed' : 'Incomplete') + '</span></div>';
+    }
+    /* Additional eval details */
+    if (details) {
+      details.innerHTML = '';
+      if (d.expected_grades) {
+        details.innerHTML += '<div class="result-detail-item"><span class="result-detail-label">Expected Grades</span><span class="result-detail-value">' + escapeHtml(String(d.expected_grades)) + '</span></div>';
+      }
+      if (d.suggested_grades) {
+        details.innerHTML += '<div class="result-detail-item"><span class="result-detail-label">Suggested Grades</span><span class="result-detail-value">' + escapeHtml(String(d.suggested_grades)) + '</span></div>';
+      }
+      if (d.grades_matched_count !== undefined) {
+        details.innerHTML += '<div class="result-detail-item"><span class="result-detail-label">Grades Matched</span><span class="result-detail-value">' + d.grades_matched_count + '</span></div>';
+      }
     }
     card.classList.add('visible');
   }
@@ -343,6 +367,7 @@
     const btn = el('single-run-btn');
     btn.disabled = false;
     btn.textContent = 'Run Test';
+    hide(el('single-stop-btn'));
   }
 
   /* ----------------------------------------------------------
@@ -397,11 +422,16 @@
       },
       file_start(d) {
         state.batchTotal = d.total;
-        addOrUpdateGridItem(d.conv_file, d.conv_file, 'running', '');
+        const gridId = d.conv_no !== undefined ? d.conv_no : d.conv_file;
+        addOrUpdateGridItem(gridId, d.conv_file, 'running', '');
         updateBatchProgressText();
       },
-      turn_start() { },
-      agent_reply() { },
+      turn_start(d) {
+        addBatchGridLog(d.conv_no, 'user', '[Turn ' + d.turn + '] ' + d.user_input);
+      },
+      agent_reply(d) {
+        addBatchGridLog(d.conv_no, 'agent', '[Turn ' + d.turn + '] ' + d.agent_msg);
+      },
       evaluating(d) {
         addOrUpdateGridItem(d.conv_no, null, 'running', 'Evaluating…');
       },
@@ -438,11 +468,14 @@
       item.className = 'live-grid-item';
       item.dataset.gridId = id;
       item.innerHTML =
+        '<div class="live-grid-item-header" style="display:flex; justify-content:space-between; cursor:pointer;" onclick="const l = this.nextElementSibling; l.style.display = l.style.display === \'none\' ? \'block\' : \'none\'">' +
         '<div class="live-grid-item-info">' +
         '<span class="live-grid-item-name"></span>' +
         '<span class="live-grid-item-sub"></span>' +
         '</div>' +
-        '<div class="live-grid-item-badge"></div>';
+        '<div class="live-grid-item-badge"></div>' +
+        '</div>' +
+        '<div class="live-grid-item-log" style="display:none; padding-top: 8px; border-top: 1px solid var(--border-color); margin-top: 8px; max-height: 200px; overflow-y: auto; font-size: 11px;"></div>';
       grid.appendChild(item);
     }
     item.className = 'live-grid-item ' + status;
@@ -459,6 +492,20 @@
     } else {
       badgeContainer.appendChild(createBadge('pending', 'PENDING'));
     }
+  }
+
+  function addBatchGridLog(id, type, text) {
+    const grid = el('batch-live-grid');
+    const item = grid.querySelector('[data-grid-id="' + id + '"]');
+    if (!item) return;
+    const logArea = item.querySelector('.live-grid-item-log');
+    if (!logArea) return;
+    const entry = document.createElement('div');
+    entry.style.marginBottom = '4px';
+    const color = type === 'user' ? 'var(--primary-light)' : 'var(--success)';
+    entry.innerHTML = '<span style="color:' + color + '; font-weight:bold;">' + type.toUpperCase() + ':</span> <span style="color:var(--text-secondary)">' + escapeHtml(text) + '</span>';
+    logArea.appendChild(entry);
+    logArea.scrollTop = logArea.scrollHeight;
   }
 
   function updateBatchProgressText() {
@@ -687,7 +734,7 @@
     gradeInfo.innerHTML =
       '<div class="detail-field"><span class="detail-field-label">Status</span><span class="detail-field-value"></span></div>' +
       '<div class="detail-field"><span class="detail-field-label">Expected Grades</span><span class="detail-field-value">' + escapeHtml(data.expected_grades || '—') + '</span></div>' +
-      '<div class="detail-field"><span class="detail-field-label">Suggested Grades</span><span class="detail-field-value">' + escapeHtml(data.suggested_grades || '—') + '</span></div>';
+      '<div class="detail-field"><span class="detail-field-label">Suggested Grades</span><span class="detail-field-value">' + formatSuggestedGrades(data.suggested_grades) + '</span></div>';
     const statusValEl = gradeInfo.querySelector('.detail-field-value');
     statusValEl.appendChild(statusBadge(data.grades_passed));
     gradeSection.appendChild(gradeInfo);
@@ -699,14 +746,24 @@
         evalItems.forEach(item => {
           const evalDiv = document.createElement('div');
           evalDiv.className = 'eval-item';
-          evalDiv.innerHTML =
-            '<div class="eval-item-header"><span class="eval-item-title">' + escapeHtml(item.grade || item.name || 'Evaluation') + '</span></div>' +
-            '<div class="eval-item-body">' +
-            (item.matched !== undefined ? '<div>Matched: <strong>' + (item.matched ? 'Yes' : 'No') + '</strong></div>' : '') +
-            (item.expected !== undefined ? '<div>Expected: ' + escapeHtml(String(item.expected)) + '</div>' : '') +
-            (item.actual !== undefined ? '<div>Actual: ' + escapeHtml(String(item.actual)) + '</div>' : '') +
-            (item.reasoning ? '<div style="margin-top:4px">Reasoning: ' + escapeHtml(item.reasoning) + '</div>' : '') +
-            '</div>';
+          if (item.totalMatched !== undefined) {
+            evalDiv.innerHTML =
+              '<div class="eval-item-header"><span class="eval-item-title">Match Results</span></div>' +
+              '<div class="eval-item-body">' +
+              '<div>Matched: <strong>' + item.totalMatched + ' / ' + item.totalExpected + '</strong> expected grades</div>' +
+              (item.matchedExpected && Array.isArray(item.matchedExpected) && item.matchedExpected.length > 0 ? '<div>Matched Grades: ' + escapeHtml(item.matchedExpected.join(', ')) + '</div>' : '') +
+              (item.reasoning ? '<div style="margin-top:4px">Reasoning: ' + escapeHtml(item.reasoning) + '</div>' : '') +
+              '</div>';
+          } else {
+            evalDiv.innerHTML =
+              '<div class="eval-item-header"><span class="eval-item-title">' + escapeHtml(item.grade || item.name || 'Evaluation') + '</span></div>' +
+              '<div class="eval-item-body">' +
+              (item.matched !== undefined ? '<div>Matched: <strong>' + (item.matched ? 'Yes' : 'No') + '</strong></div>' : '') +
+              (item.expected !== undefined ? '<div>Expected: ' + escapeHtml(String(item.expected)) + '</div>' : '') +
+              (item.actual !== undefined ? '<div>Actual: ' + escapeHtml(String(item.actual)) + '</div>' : '') +
+              (item.reasoning ? '<div style="margin-top:4px">Reasoning: ' + escapeHtml(item.reasoning) + '</div>' : '') +
+              '</div>';
+          }
           gradeSection.appendChild(evalDiv);
         });
       }
@@ -810,6 +867,7 @@
     });
 
     panel.classList.add('open');
+    el('detail-overlay').classList.add('open');
 
     const jsonBtn = el('drill-raw-json-btn');
     if (jsonBtn) {
@@ -855,6 +913,95 @@
 
   function safeJSON(str) {
     try { return JSON.parse(str); } catch { return null; }
+  }
+
+  function formatSuggestedGrades(grades) {
+    if (!grades) return '—';
+    if (Array.isArray(grades)) {
+      return escapeHtml(grades.map(a => typeof a === 'object' ? (a.gradeName || a.grade_name || a.grade || JSON.stringify(a)) : String(a)).join(', '));
+    }
+    if (typeof grades === 'string') {
+      if (grades.startsWith('[')) {
+        try {
+          const arr = JSON.parse(grades);
+          if (Array.isArray(arr)) {
+            return escapeHtml(arr.map(a => typeof a === 'object' ? (a.gradeName || a.grade_name || a.grade || JSON.stringify(a)) : String(a)).join(', '));
+          }
+        } catch (e) {
+          const matches = [...grades.matchAll(/'grade_name':\s*'([^']+)'/g)];
+          if (matches.length > 0) {
+            return escapeHtml(matches.map(m => m[1]).join(', '));
+          }
+        }
+      }
+      return escapeHtml(grades);
+    }
+    return escapeHtml(String(grades));
+  }
+
+  /* Render MLflow traces inside a container (reused in drilldown + traces page) */
+  function renderTraceSpans(data, container) {
+    if (!data || (!data.traces && !Array.isArray(data))) {
+      container.innerHTML = '<p class="text-muted">No trace data available.</p>';
+      return;
+    }
+    const traces = data.traces || (Array.isArray(data) ? data : [data]);
+    if (traces.length === 0) {
+      container.innerHTML = '<p class="text-muted">No traces found.</p>';
+      return;
+    }
+    let maxDuration = 0;
+    traces.forEach(t => {
+      if (t.total_duration_ms > maxDuration) maxDuration = t.total_duration_ms;
+      if (t.spans) t.spans.forEach(s => { if (s.duration_ms > maxDuration) maxDuration = s.duration_ms; });
+    });
+    if (maxDuration === 0) maxDuration = 1;
+
+    traces.forEach(trace => {
+      const card = document.createElement('div');
+      card.className = 'trace-card';
+      const header = document.createElement('div');
+      header.className = 'trace-header';
+      header.innerHTML =
+        '<div class="trace-header-left">' +
+        '<span class="trace-expand-icon">▶</span>' +
+        '<span class="trace-id">' + escapeHtml(String(trace.trace_id || '').substring(0, 12)) + '</span>' +
+        '</div>' +
+        '<div class="trace-header-right">' +
+        '<span>' + (trace.total_duration_ms || 0) + 'ms</span>' +
+        '</div>';
+      const sBadge = (trace.status === 'OK' || trace.status === 'ok')
+        ? createBadge('pass', trace.status)
+        : createBadge('fail', trace.status || 'ERROR');
+      header.querySelector('.trace-header-right').prepend(sBadge);
+
+      const body = document.createElement('div');
+      body.className = 'trace-body';
+      if (trace.spans && trace.spans.length > 0) {
+        trace.spans.forEach(span => {
+          const spanEl = document.createElement('div');
+          spanEl.className = 'span-item';
+          const pctWidth = maxDuration > 0 ? (span.duration_ms / maxDuration * 100) : 0;
+          const barClass = (span.status === 'OK' || span.status === 'ok' || !span.status) ? 'ok' : 'error';
+          spanEl.innerHTML =
+            '<span class="span-name" title="' + escapeHtml(span.name) + '">' + escapeHtml(span.name) + '</span>' +
+            '<div class="span-duration-bar"><div class="duration-bar-container">' +
+            '<div class="duration-bar-track"><div class="duration-bar-fill ' + barClass + '" style="width:' + pctWidth + '%"></div></div>' +
+            '<span class="duration-value">' + (span.duration_ms || 0) + 'ms</span>' +
+            '</div></div>';
+          body.appendChild(spanEl);
+        });
+      } else {
+        body.innerHTML = '<p class="text-muted text-sm" style="padding:8px 0">No spans recorded.</p>';
+      }
+      header.addEventListener('click', () => {
+        body.classList.toggle('open');
+        header.querySelector('.trace-expand-icon').classList.toggle('expanded');
+      });
+      card.appendChild(header);
+      card.appendChild(body);
+      container.appendChild(card);
+    });
   }
 
   function closeDetailPanel() {
@@ -1318,7 +1465,8 @@
     el('trace-fetch-btn').innerHTML = '<span class="spinner" style="width:12px;height:12px;margin-right:6px;display:inline-block"></span>Fetching...';
 
     try {
-      const data = await api('/api/mlflow/traces/' + encodeURIComponent(convId));
+      const env = el('global-environment').value || 'Local';
+      const data = await api('/api/mlflow/traces/' + encodeURIComponent(convId) + '?env=' + encodeURIComponent(env));
       renderMLflowTraces(data);
     } catch { }
 

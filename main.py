@@ -120,7 +120,7 @@ async def run_all_tests_async(num_rounds: int, use_llm_eval: bool, das_env: str,
             expected_ctqs = gt["assumptions"].get(conv_no, {}).get("expectedCTQs", [])
             
             if on_progress:
-                on_progress("file_start", {"conv_file": conv_file.name, "index": idx + 1, "total": len(test_files)})
+                on_progress("file_start", {"conv_no": conv_no, "conv_file": conv_file.name, "index": idx + 1, "total": len(test_files)})
             
             result = await run_test(
                 conv_no=conv_no,

@@ -14,7 +14,12 @@ def extract_conversation_no(filename: str) -> int | None:
 
 def collect_test_files(folder: str) -> list[Path]:
     folder_path = Path(folder)
-    return sorted(list(folder_path.glob("*.json")))
+    files = list(folder_path.glob("*.json"))
+    # Natural sort: extract number from filename, sort numerically
+    def sort_key(f):
+        m = re.search(r'(\d+)', f.stem)
+        return int(m.group(1)) if m else 0
+    return sorted(files, key=sort_key)
 
 def load_expected_grades(path: str) -> dict[int, dict]:
     try:

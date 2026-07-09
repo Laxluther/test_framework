@@ -116,8 +116,9 @@
               <span id="single-rounds-val" style="width: 20px; font-weight: 500;">1</span>
             </div>
           </div>
-          <div class="form-group flex-1">
-            <button id="single-run-btn" class="btn btn-primary w-100">Run Test</button>
+          <div class="form-group flex-1 flex-row">
+            <button id="single-run-btn" class="btn btn-primary flex-1">Run Test</button>
+            <button id="single-stop-btn" class="btn btn-danger flex-1 hidden" style="margin-left: 8px;">Stop</button>
           </div>
         </div>
       </div>
@@ -134,6 +135,9 @@
           </div>
           <div class="result-stats">
             <!-- Stats inserted via JS -->
+          </div>
+          <div id="single-result-details" class="result-details" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color);">
+            <!-- Eval details inserted via JS -->
           </div>
         </div>
       </div>
@@ -391,6 +395,18 @@
     </div>
     <div id="detail-panel-body" class="detail-panel-body">
       <!-- Content injected via JS -->
+    </div>
+  </div>
+
+  <!-- CONFIRM MODAL -->
+  <div id="confirm-modal" class="modal-overlay">
+    <div class="modal-card">
+      <h3 id="confirm-modal-title" class="modal-title">Confirm</h3>
+      <p id="confirm-modal-body" class="modal-body">Are you sure?</p>
+      <div class="modal-actions">
+        <button id="confirm-modal-cancel" class="btn btn-secondary btn-sm">Cancel</button>
+        <button id="confirm-modal-confirm" class="btn btn-danger btn-sm">Confirm</button>
+      </div>
     </div>
   </div>
 
