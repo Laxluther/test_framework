@@ -10,7 +10,7 @@ from core.reporter import generate_report
 from core.db import create_batch_run, update_batch_run_metrics, insert_test_result
 from test_agents import simulator_agent, grade_evaluator_agent, assumption_evaluator_agent
 
-async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: bool, das_env: str, on_progress=None):
+async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: bool, das_env: str, on_progress=None, cancel_flag=None):
     api_url = DAS_ENVIRONMENTS.get(das_env, DAS_ENVIRONMENTS["Local"])
     api_key = DAS_API_KEYS.get(das_env, "")
     
@@ -29,6 +29,10 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
     all_results = []
     
     for rnd in range(1, num_rounds + 1):
+        if cancel_flag and cancel_flag.is_set():
+            if on_progress:
+                on_progress("cancelled", {"completed": rnd - 1, "total": num_rounds, "round": rnd})
+            break
         if on_progress:
             on_progress("round_start", {"round": rnd})
             
@@ -73,7 +77,10 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
             flow_completed=result.get("flowCompleted", False),
             error_message=result.get("error", ""),
             expected_assumptions=expected_ctqs,
-            agent_assumptions=result.get("agentAssumptionOutput", "")
+            agent_assumptions=result.get("agentAssumptionOutput", ""),
+            actual_turns_json=json.dumps(result.get("actualTurns", [])),
+            grade_eval_details=json.dumps(result.get("gradeEvaluation", {})),
+            assumption_eval_details=json.dumps(result.get("assumptionEvaluation", {})),
         )
             
         all_results.append(result)
@@ -82,7 +89,7 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
     generate_report(out_dir, out_dir / "consolidated_report.xlsx")
     return out_dir
 
-async def run_all_tests_async(num_rounds: int, use_llm_eval: bool, das_env: str, on_progress=None):
+async def run_all_tests_async(num_rounds: int, use_llm_eval: bool, das_env: str, on_progress=None, cancel_flag=None):
     api_url = DAS_ENVIRONMENTS.get(das_env, DAS_ENVIRONMENTS["Local"])
     api_key = DAS_API_KEYS.get(das_env, "")
     
@@ -103,6 +110,10 @@ async def run_all_tests_async(num_rounds: int, use_llm_eval: bool, das_env: str,
         round_dir.mkdir(exist_ok=True)
         
         for idx, conv_file in enumerate(test_files):
+            if cancel_flag and cancel_flag.is_set():
+                if on_progress:
+                    on_progress("cancelled", {"completed": idx, "total": len(test_files), "round": rnd})
+                break
             conv_no = extract_conversation_no(conv_file.name)
             if not conv_no: continue
                 
@@ -150,7 +161,10 @@ async def run_all_tests_async(num_rounds: int, use_llm_eval: bool, das_env: str,
                 flow_completed=result.get("flowCompleted", False),
                 error_message=result.get("error", ""),
                 expected_assumptions=expected_ctqs,
-                agent_assumptions=result.get("agentAssumptionOutput", "")
+                agent_assumptions=result.get("agentAssumptionOutput", ""),
+                actual_turns_json=json.dumps(result.get("actualTurns", [])),
+                grade_eval_details=json.dumps(result.get("gradeEvaluation", {})),
+                assumption_eval_details=json.dumps(result.get("assumptionEvaluation", {})),
             )
             
     update_batch_run_metrics(batch_id)

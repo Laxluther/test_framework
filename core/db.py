@@ -45,6 +45,13 @@ def init_db():
         )
     ''')
     
+    # Schema migration: add new columns if they don't exist
+    for col_name in ['actual_turns_json', 'grade_eval_details', 'assumption_eval_details']:
+        try:
+            cursor.execute(f'ALTER TABLE test_results ADD COLUMN {col_name} TEXT')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+    
     conn.commit()
     conn.close()
 
@@ -112,7 +119,10 @@ def insert_test_result(
     flow_completed: bool,
     error_message: str,
     expected_assumptions: List[str] = None,
-    agent_assumptions: str = ""
+    agent_assumptions: str = "",
+    actual_turns_json: str = None,
+    grade_eval_details: str = None,
+    assumption_eval_details: str = None
 ) -> int:
     if expected_assumptions is None:
         expected_assumptions = []
@@ -126,8 +136,9 @@ def insert_test_result(
             application_name, expected_grades, suggested_grades, 
             grades_matched_count, grades_passed, assumptions_score, 
             assumptions_passed, flow_completed, error_message,
-            expected_assumptions, agent_assumptions
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            expected_assumptions, agent_assumptions,
+            actual_turns_json, grade_eval_details, assumption_eval_details
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         batch_id,
         das_env,
@@ -144,7 +155,10 @@ def insert_test_result(
         1 if flow_completed else 0,
         error_message,
         json.dumps(expected_assumptions),
-        agent_assumptions
+        agent_assumptions,
+        actual_turns_json,
+        grade_eval_details,
+        assumption_eval_details
     ))
     
     row_id = cursor.lastrowid
@@ -227,6 +241,51 @@ def update_test_result_override(test_id: int, new_grades_passed: Optional[bool],
     
     if batch_id is not None:
         update_batch_run_metrics(batch_id)
+
+def delete_batch_run(batch_id):
+    """Delete a batch run and all its test results."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM test_results WHERE batch_id = ?', (batch_id,))
+    cursor.execute('DELETE FROM batch_runs WHERE id = ?', (batch_id,))
+    conn.commit()
+    conn.close()
+
+def delete_test_result(result_id):
+    """Delete a single test result."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT batch_id FROM test_results WHERE id = ?', (result_id,))
+    row = cursor.fetchone()
+    batch_id = row[0] if row else None
+    cursor.execute('DELETE FROM test_results WHERE id = ?', (result_id,))
+    conn.commit()
+    conn.close()
+    if batch_id:
+        update_batch_run_metrics(batch_id)
+
+def get_single_result_detail(result_id):
+    """Get full detail for one test result including conversation turns."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM test_results WHERE id = ?', (result_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    for field in ['expected_grades', 'suggested_grades', 'expected_assumptions']:
+        d[field] = json.loads(d[field]) if d[field] else []
+    for field in ['actual_turns_json', 'grade_eval_details', 'assumption_eval_details']:
+        d[field] = json.loads(d[field]) if d.get(field) else None
+    return d
+
+def get_comparison_data(session_a, session_b):
+    """Get results for two sessions for comparison."""
+    results_a = get_test_results_for_batch(session_a)
+    results_b = get_test_results_for_batch(session_b)
+    return {"session_a": results_a, "session_b": results_b}
 
 # Initialize DB on import
 init_db()
