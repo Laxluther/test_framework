@@ -209,15 +209,18 @@ def api_mlflow_traces(conversation_id):
 
 @app.route("/api/report/<int:session_id>")
 def api_download_report(session_id):
-    # Find the results directory for this session
     results_dir = Path("results")
-    # Search for report files in results subdirectories
+    if not results_dir.exists():
+        return jsonify({"error": "No results directory found"}), 404
+        
+    # Search for correct report directory matching the session_id
     for d in results_dir.iterdir():
-        if d.is_dir():
+        if d.is_dir() and d.name.startswith(f"session_{session_id}_"):
             report = d / "consolidated_report.xlsx"
             if report.exists():
-                return send_file(str(report), as_attachment=True, download_name="consolidated_report.xlsx")
-    return jsonify({"error": "Report not found"}), 404
+                return send_file(str(report), as_attachment=True, download_name=f"consolidated_report_session_{session_id}.xlsx")
+                
+    return jsonify({"error": f"Report for session {session_id} not found"}), 404
 
 @app.route("/api/run/is-running")
 def api_is_running():

@@ -14,8 +14,9 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
     api_url = DAS_ENVIRONMENTS.get(das_env, DAS_ENVIRONMENTS["Local"])
     api_key = DAS_API_KEYS.get(das_env, "")
     
+    batch_id = create_batch_run(das_env, num_rounds)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    out_dir = Path(f"results/{datetime.now().strftime('%Y-%m-%d')}_single_{conv_file.stem}_{timestamp}")
+    out_dir = Path(f"results/session_{batch_id}_{datetime.now().strftime('%Y-%m-%d')}_single_{conv_file.stem}_{timestamp}")
     out_dir.mkdir(parents=True, exist_ok=True)
     
     gt = load_all_ground_truth(DEFAULT_GRADES_FILE, DEFAULT_ASSUMPTIONS_FILE)
@@ -24,8 +25,6 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
     
     expected_grades = gt["grades"].get(conv_no, {}).get("expectedGrades", [])
     expected_ctqs = gt["assumptions"].get(conv_no, {}).get("expectedCTQs", [])
-    
-    batch_id = create_batch_run(das_env, num_rounds)
     all_results = []
     
     for rnd in range(1, num_rounds + 1):
@@ -93,14 +92,13 @@ async def run_all_tests_async(num_rounds: int, use_llm_eval: bool, das_env: str,
     api_url = DAS_ENVIRONMENTS.get(das_env, DAS_ENVIRONMENTS["Local"])
     api_key = DAS_API_KEYS.get(das_env, "")
     
+    batch_id = create_batch_run(das_env, num_rounds)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    out_dir = Path(f"results/{datetime.now().strftime('%Y-%m-%d')}_full_run_{timestamp}")
+    out_dir = Path(f"results/session_{batch_id}_{datetime.now().strftime('%Y-%m-%d')}_full_run_{timestamp}")
     out_dir.mkdir(parents=True, exist_ok=True)
     
     gt = load_all_ground_truth(DEFAULT_GRADES_FILE, DEFAULT_ASSUMPTIONS_FILE)
     test_files = collect_test_files(CONVERSATION_FOLDER)
-    
-    batch_id = create_batch_run(das_env, num_rounds)
     
     for rnd in range(1, num_rounds + 1):
         if on_progress:
