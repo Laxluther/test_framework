@@ -7,7 +7,6 @@ from agents import Runner
 from .config import MAX_TURNS, DEFAULT_EMAIL, DEFAULT_INDUSTRY
 from .das_client import das_send, das_end
 from .evaluator import evaluate_grades, evaluate_assumptions
-from core.evaluator import evaluate_grades_string_match, evaluate_ctq_assumptions
 from core.loader import extract_app_name
 
 def extract_requirements(reference: dict) -> list[str]:
@@ -121,6 +120,10 @@ async def run_test(
         
     grade_eval = await evaluate_grades(grade_evaluator_agent, suggested_grades, expected_grades, use_llm=use_llm_eval)
     
+    grade_passed = grade_eval.get("passed")
+    success = grade_passed
+    
+        
     assumption_text = "\n".join([t["assumptionText"] for t in assumption_turns])
     if assumption_text and expected_ctqs:
         assumption_eval = await evaluate_assumptions(assumption_evaluator_agent, app_name, assumption_text, expected_ctqs, use_llm=use_llm_eval)

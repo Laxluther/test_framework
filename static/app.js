@@ -378,6 +378,116 @@
     on('batch-stop-btn', 'click', stopBatchRun);
   }
 
+  function getBatchHandlers(ctx) {
+    return {
+      round_start(d) {
+        state.batchRound = d.round;
+        state.batchTotalRounds = d.total_rounds;
+        state.batchCompleted = 0;
+        ctx.roundResults = [];
+        updateBatchProgressText();
+        
+        const grid = el('batch-live-grid');
+        grid.querySelectorAll('.batch-round-content').forEach(el => el.style.display = 'none');
+        
+        const roundDiv = document.createElement('div');
+        roundDiv.className = 'batch-round-group';
+        roundDiv.dataset.round = d.round;
+        roundDiv.innerHTML = 
+          '<div class="batch-round-header" style="cursor:pointer; padding:8px 12px; background:var(--bg-secondary); border-radius:6px; margin-bottom:12px; font-weight:600; border:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;" onclick="const content = this.nextElementSibling; content.style.display = content.style.display === \'none\' ? \'grid\' : \'none\'">' +
+          '<span>Round ' + d.round + '</span><span style="font-size:11px; font-weight:normal; color:var(--text-secondary)">(Click to toggle)</span></div>' +
+          '<div class="live-grid batch-round-content" style="display:grid; margin-bottom: 24px;"></div>';
+        
+        grid.appendChild(roundDiv);
+      },
+      file_start(d) {
+        state.batchTotal = d.total;
+        const gridId = d.conv_no !== undefined ? d.conv_no : d.conv_file;
+        addOrUpdateGridItem(gridId, d.conv_file, 'running', '');
+        updateBatchProgressText();
+      },
+      turn_start(d) {
+        addBatchGridLog(d.conv_no, 'user', '[Turn ' + d.turn + '] ' + d.user_input);
+      },
+      agent_reply(d) {
+        addBatchGridLog(d.conv_no, 'agent', '[Turn ' + d.turn + '] ' + d.agent_msg);
+      },
+      evaluating(d) {
+        addOrUpdateGridItem(d.conv_no, null, 'running', 'Evaluating…');
+      },
+      completed(d) {
+        state.batchCompleted++;
+        const status = d.success ? 'pass' : 'fail';
+        addOrUpdateGridItem(d.conv_no, d.application || d.conv_no, status, '');
+        ctx.roundResults.push(d);
+        updateBatchProgressText();
+        updateBatchProgressBar();
+      },
+      run_complete(d) {
+        if (ctx.roundResults.length > 0) addRoundSummary(state.batchRound, ctx.roundResults);
+        showToast('Batch run complete', 'success');
+        finishBatchRun();
+      },
+      error(d) {
+        showToast(d.message, 'error');
+        finishBatchRun();
+      },
+      cancelled(d) {
+        showToast('Cancelled. Completed ' + d.completed + '/' + d.total, 'error');
+        if (ctx.roundResults.length > 0) addRoundSummary(d.round || state.batchRound, ctx.roundResults);
+        finishBatchRun();
+      },
+    };
+  }
+
+  function resumeBatchRun(snap) {
+    if (!snap || snap.mode !== 'batch') return;
+    
+    el('batch-run-btn').disabled = true;
+    el('batch-run-btn').innerHTML = '<span class="spinner"></span> Running…';
+    show(el('batch-stop-btn'));
+    show(el('batch-progress-area'));
+    
+    state.batchGrid = [];
+    state.batchRound = 0;
+    state.batchTotalRounds = snap.total_rounds || 1;
+    state.batchCompleted = 0;
+    state.batchTotal = snap.total || 0;
+    state.roundSummaries = [];
+    
+    el('batch-live-grid').innerHTML = '';
+    el('batch-round-summaries').innerHTML = '';
+    updateBatchProgress(0, 0, 0, 0);
+    
+    const ctx = { roundResults: [] };
+    const handlers = getBatchHandlers(ctx);
+    
+    snap.completedRounds.forEach(r => {
+       handlers.round_start({ round: r.round, total_rounds: snap.total_rounds });
+       r.results.forEach(res => {
+         handlers.file_start({ total: snap.total, conv_no: res.conv_no, conv_file: res.conv_file });
+         handlers.completed(res);
+       });
+       addRoundSummary(r.round, r.results);
+       ctx.roundResults = [];
+    });
+    
+    if (snap.round) {
+       handlers.round_start({ round: snap.round, total_rounds: snap.total_rounds });
+       Object.keys(snap.items).forEach(id => {
+          const item = snap.items[id];
+          handlers.file_start({ total: snap.total, conv_no: id, conv_file: item.conv_file });
+          item.logs.forEach(l => {
+             addBatchGridLog(id, l.type, l.text);
+          });
+          if (item.status === 'pass' || item.status === 'fail') {
+             handlers.completed({ conv_no: id, application: item.application, success: item.status === 'pass' });
+          }
+       });
+    }
+    connectSSE(handlers);
+  }
+
   async function startBatchRun() {
     const env = el('global-environment').value;
     const rounds = parseInt(el('batch-rounds').value) || 1;
@@ -410,68 +520,8 @@
       return;
     }
 
-    let roundResults = [];
-
-    connectSSE({
-      round_start(d) {
-        state.batchRound = d.round;
-        state.batchTotalRounds = d.total_rounds;
-        state.batchCompleted = 0;
-        roundResults = [];
-        updateBatchProgressText();
-        
-        const grid = el('batch-live-grid');
-        // Collapse previous rounds
-        grid.querySelectorAll('.batch-round-content').forEach(el => el.style.display = 'none');
-        
-        const roundDiv = document.createElement('div');
-        roundDiv.className = 'batch-round-group';
-        roundDiv.dataset.round = d.round;
-        roundDiv.innerHTML = 
-          '<div class="batch-round-header" style="cursor:pointer; padding:8px 12px; background:var(--bg-secondary); border-radius:6px; margin-bottom:12px; font-weight:600; border:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;" onclick="const content = this.nextElementSibling; content.style.display = content.style.display === \'none\' ? \'grid\' : \'none\'">' +
-          '<span>Round ' + d.round + '</span><span style="font-size:11px; font-weight:normal; color:var(--text-secondary)">(Click to toggle)</span></div>' +
-          '<div class="live-grid batch-round-content" style="display:grid; margin-bottom: 24px;"></div>';
-        
-        grid.appendChild(roundDiv);
-      },
-      file_start(d) {
-        state.batchTotal = d.total;
-        const gridId = d.conv_no !== undefined ? d.conv_no : d.conv_file;
-        addOrUpdateGridItem(gridId, d.conv_file, 'running', '');
-        updateBatchProgressText();
-      },
-      turn_start(d) {
-        addBatchGridLog(d.conv_no, 'user', '[Turn ' + d.turn + '] ' + d.user_input);
-      },
-      agent_reply(d) {
-        addBatchGridLog(d.conv_no, 'agent', '[Turn ' + d.turn + '] ' + d.agent_msg);
-      },
-      evaluating(d) {
-        addOrUpdateGridItem(d.conv_no, null, 'running', 'Evaluating…');
-      },
-      completed(d) {
-        state.batchCompleted++;
-        const status = d.success ? 'pass' : 'fail';
-        addOrUpdateGridItem(d.conv_no, d.application || d.conv_no, status, '');
-        roundResults.push(d);
-        updateBatchProgressText();
-        updateBatchProgressBar();
-      },
-      run_complete(d) {
-        if (roundResults.length > 0) addRoundSummary(state.batchRound, roundResults);
-        showToast('Batch run complete', 'success');
-        finishBatchRun();
-      },
-      error(d) {
-        showToast(d.message, 'error');
-        finishBatchRun();
-      },
-      cancelled(d) {
-        showToast('Cancelled. Completed ' + d.completed + '/' + d.total, 'error');
-        if (roundResults.length > 0) addRoundSummary(d.round || state.batchRound, roundResults);
-        finishBatchRun();
-      },
-    });
+    const ctx = { roundResults: [] };
+    connectSSE(getBatchHandlers(ctx));
   }
 
   function addOrUpdateGridItem(id, name, status, subText) {
@@ -1627,13 +1677,25 @@
           singleBtn.disabled = true;
           singleBtn.innerHTML = '<span class="spinner"></span> Running…';
         }
-        const batchBtn = el('batch-run-btn');
-        if (batchBtn) {
-          batchBtn.disabled = true;
-          batchBtn.innerHTML = '<span class="spinner"></span> Running…';
+        
+        if (data.snapshot && data.snapshot.mode === 'batch') {
+          resumeBatchRun(data.snapshot);
+        } else if (data.snapshot && data.snapshot.mode === 'single') {
+          // If single run, just show the spinner. 
+          // Rebuilding single-log is not implemented yet.
+          const stopBtn = el('single-stop-btn');
+          if (stopBtn) show(stopBtn);
+          // connectSSE({}) ... can be omitted for single runs as UI isn't fully robust.
+        } else {
+          // Fallback if no snapshot
+          const batchBtn = el('batch-run-btn');
+          if (batchBtn) {
+            batchBtn.disabled = true;
+            batchBtn.innerHTML = '<span class="spinner"></span> Running…';
+          }
+          const stopBtn = el('batch-stop-btn');
+          if (stopBtn) show(stopBtn);
         }
-        const stopBtn = el('batch-stop-btn');
-        if (stopBtn) show(stopBtn);
       }
     } catch { }
   }

@@ -24,7 +24,20 @@ run_state = {
     "running": False,
     "cancel_flag": threading.Event(),
     "progress_queue": queue.Queue(),
+    "snapshot": {}
 }
+
+def reset_snapshot():
+    run_state["snapshot"] = {
+        "mode": "",
+        "round": 0,
+        "total_rounds": 0,
+        "completed": 0,
+        "total": 0,
+        "items": {},
+        "roundResults": [],
+        "completedRounds": []
+    }
 
 @app.route("/")
 def index():
@@ -50,11 +63,54 @@ def api_config():
     })
 
 def progress_callback(event_type, data):
-    """Callback that pushes progress events to the SSE queue."""
+    """Callback that pushes progress events to the SSE queue and updates snapshot."""
     run_state["progress_queue"].put({"event": event_type, "data": data})
+    
+    snap = run_state.get("snapshot", {})
+    if not snap: return
+    
+    if event_type == "round_start":
+        snap["round"] = data.get("round", 0)
+        snap["total_rounds"] = data.get("total_rounds", snap.get("total_rounds", 0))
+        snap["items"] = {}
+        snap["completed"] = 0
+        snap["roundResults"] = []
+    elif event_type == "file_start":
+        snap["total"] = data.get("total", 0)
+        grid_id = str(data.get("conv_no", data.get("conv_file", "")))
+        snap["items"][grid_id] = {
+            "conv_file": data.get("conv_file", ""),
+            "status": "running",
+            "logs": []
+        }
+    elif event_type in ("turn_start", "agent_reply"):
+        grid_id = str(data.get("conv_no", ""))
+        if grid_id in snap["items"]:
+            logs = snap["items"][grid_id]["logs"]
+            who = "user" if event_type == "turn_start" else "agent"
+            msg = data.get("user_input") if who == "user" else data.get("agent_msg")
+            logs.append({"type": who, "text": f"[Turn {data.get('turn', 0)}] {msg}"})
+            if len(logs) > 10: logs.pop(0)
+    elif event_type == "completed":
+        grid_id = str(data.get("conv_no", ""))
+        snap["completed"] += 1
+        if grid_id in snap["items"]:
+            snap["items"][grid_id]["status"] = "pass" if data.get("success") else "fail"
+            snap["items"][grid_id]["application"] = data.get("application", "")
+        snap["roundResults"].append(data)
+    elif event_type == "run_complete" and snap.get("roundResults"):
+        snap["completedRounds"].append({
+            "round": snap["round"],
+            "results": list(snap["roundResults"])
+        })
 
 def run_test_in_thread(mode, **kwargs):
     """Run test in a background thread using asyncio."""
+    reset_snapshot()
+    run_state["snapshot"]["mode"] = mode
+    if mode == "batch":
+        run_state["snapshot"]["total_rounds"] = kwargs.get("num_rounds", 1)
+        
     run_state["running"] = True
     run_state["cancel_flag"].clear()
     # drain old events
@@ -224,7 +280,10 @@ def api_download_report(session_id):
 
 @app.route("/api/run/is-running")
 def api_is_running():
-    return jsonify({"running": run_state["running"]})
+    return jsonify({
+        "running": run_state["running"],
+        "snapshot": run_state.get("snapshot", {})
+    })
 
 if __name__ == "__main__":
     print("Starting DAS Testing System on http://localhost:5000")
