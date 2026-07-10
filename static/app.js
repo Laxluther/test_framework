@@ -239,7 +239,15 @@
   function initSingleRun() {
     on('single-run-btn', 'click', startSingleRun);
     on('single-stop-btn', 'click', async () => {
-      try { await api('/api/run/stop', { method: 'POST' }); showToast('Stop requested', 'success'); } catch { }
+      try { 
+        const btn = el('single-stop-btn');
+        if (btn) {
+          btn.disabled = true;
+          btn.innerHTML = '<span class="spinner"></span> Stopping...';
+        }
+        await api('/api/run/stop', { method: 'POST' }); 
+        showToast('Stop requested', 'success'); 
+      } catch { }
     });
   }
 
@@ -367,7 +375,12 @@
     const btn = el('single-run-btn');
     btn.disabled = false;
     btn.textContent = 'Run Test';
-    hide(el('single-stop-btn'));
+    const stopBtn = el('single-stop-btn');
+    hide(stopBtn);
+    if (stopBtn) {
+      stopBtn.disabled = false;
+      stopBtn.textContent = 'Stop Run';
+    }
   }
 
   /* ----------------------------------------------------------
@@ -618,6 +631,11 @@
 
   async function stopBatchRun() {
     try {
+      const btn = el('batch-stop-btn');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Stopping...';
+      }
       await api('/api/run/stop', { method: 'POST' });
       showToast('Stop requested', 'success');
     } catch { }
@@ -629,7 +647,12 @@
     const btn = el('batch-run-btn');
     btn.disabled = false;
     btn.textContent = 'Run Batch';
-    hide(el('batch-stop-btn'));
+    const stopBtn = el('batch-stop-btn');
+    hide(stopBtn);
+    if (stopBtn) {
+      stopBtn.disabled = false;
+      stopBtn.textContent = 'Stop Run';
+    }
   }
 
   /* ----------------------------------------------------------
@@ -801,8 +824,8 @@
     gradeInfo.className = 'detail-grid mb-4';
     gradeInfo.innerHTML =
       '<div class="detail-field"><span class="detail-field-label">Status</span><span class="detail-field-value"></span></div>' +
-      '<div class="detail-field"><span class="detail-field-label">Expected Grades</span><span class="detail-field-value">' + escapeHtml(data.expected_grades || '—') + '</span></div>' +
-      '<div class="detail-field"><span class="detail-field-label">Suggested Grades</span><span class="detail-field-value">' + formatSuggestedGrades(data.suggested_grades) + '</span></div>';
+      '<div class="detail-field" style="grid-column: 1 / -1;"><span class="detail-field-label">Expected Grades</span><span class="detail-field-value">' + escapeHtml(data.expected_grades || '—') + '</span></div>' +
+      '<div class="detail-field" style="grid-column: 1 / -1;"><span class="detail-field-label">Suggested Grades</span><span class="detail-field-value">' + formatSuggestedGrades(data.suggested_grades) + '</span></div>';
     const statusValEl = gradeInfo.querySelector('.detail-field-value');
     statusValEl.appendChild(statusBadge(data.grades_passed));
     gradeSection.appendChild(gradeInfo);
@@ -1104,6 +1127,7 @@
     const results = await api('/api/results/' + sessionId);
     renderHeatmap(results || []);
     renderDashboardCharts(results || []);
+    show(el('dashboard-content'));
   }
 
   function renderHeatmap(results) {
