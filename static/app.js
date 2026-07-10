@@ -419,6 +419,20 @@
         state.batchCompleted = 0;
         roundResults = [];
         updateBatchProgressText();
+        
+        const grid = el('batch-live-grid');
+        // Collapse previous rounds
+        grid.querySelectorAll('.batch-round-content').forEach(el => el.style.display = 'none');
+        
+        const roundDiv = document.createElement('div');
+        roundDiv.className = 'batch-round-group';
+        roundDiv.dataset.round = d.round;
+        roundDiv.innerHTML = 
+          '<div class="batch-round-header" style="cursor:pointer; padding:8px 12px; background:var(--bg-secondary); border-radius:6px; margin-bottom:12px; font-weight:600; border:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;" onclick="const content = this.nextElementSibling; content.style.display = content.style.display === \'none\' ? \'grid\' : \'none\'">' +
+          '<span>Round ' + d.round + '</span><span style="font-size:11px; font-weight:normal; color:var(--text-secondary)">(Click to toggle)</span></div>' +
+          '<div class="live-grid batch-round-content" style="display:grid; margin-bottom: 24px;"></div>';
+        
+        grid.appendChild(roundDiv);
       },
       file_start(d) {
         state.batchTotal = d.total;
@@ -462,7 +476,10 @@
 
   function addOrUpdateGridItem(id, name, status, subText) {
     const grid = el('batch-live-grid');
-    let item = grid.querySelector('[data-grid-id="' + id + '"]');
+    let roundContent = grid.querySelector('.batch-round-group:last-child .batch-round-content');
+    if (!roundContent) roundContent = grid;
+    
+    let item = roundContent.querySelector('[data-grid-id="' + id + '"]');
     if (!item) {
       item = document.createElement('div');
       item.className = 'live-grid-item';
@@ -476,7 +493,7 @@
         '<div class="live-grid-item-badge"></div>' +
         '</div>' +
         '<div class="live-grid-item-log" style="display:none; padding-top: 8px; border-top: 1px solid var(--border-color); margin-top: 8px; max-height: 200px; overflow-y: auto; font-size: 11px;"></div>';
-      grid.appendChild(item);
+      roundContent.appendChild(item);
     }
     item.className = 'live-grid-item ' + status;
     if (name) item.querySelector('.live-grid-item-name').textContent = name;
@@ -496,7 +513,8 @@
 
   function addBatchGridLog(id, type, text) {
     const grid = el('batch-live-grid');
-    const item = grid.querySelector('[data-grid-id="' + id + '"]');
+    const roundContent = grid.querySelector('.batch-round-group:last-child .batch-round-content') || grid;
+    const item = roundContent.querySelector('[data-grid-id="' + id + '"]');
     if (!item) return;
     const logArea = item.querySelector('.live-grid-item-log');
     if (!logArea) return;
@@ -574,8 +592,8 @@
   }
 
   function renderResultsTables(sessions) {
-    const batchSessions = sessions.filter(s => !s.single_app_name);
-    const singleSessions = sessions.filter(s => s.single_app_name);
+    const batchSessions = sessions.filter(s => s.unique_convs > 1);
+    const singleSessions = sessions.filter(s => s.unique_convs === 1);
     renderBatchResultsTable(batchSessions);
     renderSingleResultsTable(singleSessions);
   }
@@ -1015,8 +1033,9 @@
   async function loadDashboardSessions() {
     const data = await api('/api/results/sessions');
     const sel = el('dashboard-session-select');
-    sel.innerHTML = '<option value="">Select session…</option>';
-    (data || []).forEach(s => {
+    sel.innerHTML = '<option value="">Select batch session…</option>';
+    const batchSessions = (data || []).filter(s => s.unique_convs > 1);
+    batchSessions.forEach(s => {
       const opt = document.createElement('option');
       opt.value = s.id;
       opt.textContent = String(s.id).substring(0, 8) + ' — ' + formatDate(s.timestamp) + (s.das_env ? ' (' + s.das_env + ')' : '');
@@ -1026,6 +1045,7 @@
 
   function initDashboard() {
     on('dashboard-session-select', 'change', loadDashboardData);
+    on('dashboard-load-btn', 'click', loadDashboardData);
   }
 
   async function loadDashboardData() {

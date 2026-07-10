@@ -12,6 +12,14 @@ def extract_conversation_no(filename: str) -> int | None:
         return int(match.group(1))
     return None
 
+def extract_app_name(filename: str) -> str:
+    """Extracts application name from format Conversation_<no>_<app_name>.json"""
+    match = re.search(r'Conversation_\d+_(.+?)(?:\.json)?$', filename, re.IGNORECASE)
+    if match:
+        name = match.group(1)
+        return name.replace('_', ' ').strip()
+    return filename
+
 def collect_test_files(folder: str) -> list[Path]:
     folder_path = Path(folder)
     files = list(folder_path.glob("*.json"))

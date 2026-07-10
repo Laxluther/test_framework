@@ -7,6 +7,8 @@ from agents import Runner
 from .config import MAX_TURNS, DEFAULT_EMAIL, DEFAULT_INDUSTRY
 from .das_client import das_send, das_end
 from .evaluator import evaluate_grades, evaluate_assumptions
+from core.evaluator import evaluate_grades_string_match, evaluate_ctq_assumptions
+from core.loader import extract_app_name
 
 def extract_requirements(reference: dict) -> list[str]:
     return [t["content"] for t in reference.get("turns", []) if t["role"] == "user"]
@@ -46,7 +48,8 @@ async def run_test(
     use_llm_eval: bool = True,
     on_progress = None
 ) -> dict:
-    app_name = reference.get("application", reference.get("filename", f"Conversation_{conv_no}.json"))
+    filename = reference.get("filename", f"Conversation_{conv_no}.json")
+    app_name = reference.get("application", extract_app_name(filename))
     industry = reference.get("industry", DEFAULT_INDUSTRY)
     user_email = reference.get("user_email", DEFAULT_EMAIL)
     conversation_id = str(uuid.uuid4())

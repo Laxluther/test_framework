@@ -13,7 +13,7 @@ from core.db import (get_past_runs, get_test_results_for_batch, get_single_resul
                      update_test_result_override, delete_batch_run, delete_test_result,
                      get_comparison_data)
 from core.mlflow_client import get_traces_for_conversation
-from core.loader import collect_test_files, extract_conversation_no, load_conversation_json
+from core.loader import collect_test_files, extract_conversation_no, load_conversation_json, extract_app_name
 
 nest_asyncio.apply()
 
@@ -39,9 +39,9 @@ def api_config():
         conv_path = Path("conversation") / name
         try:
             data = load_conversation_json(conv_path)
-            app_name = data.get("application", name)
+            app_name = data.get("application", extract_app_name(name))
         except:
-            app_name = name
+            app_name = extract_app_name(name)
         conv_no = extract_conversation_no(name)
         conv_list.append({"filename": name, "application": app_name, "conv_no": conv_no})
     return jsonify({

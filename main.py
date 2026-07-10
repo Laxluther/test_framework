@@ -22,7 +22,7 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
     gt = load_all_ground_truth(DEFAULT_GRADES_FILE, DEFAULT_ASSUMPTIONS_FILE)
     conv_no = extract_conversation_no(conv_file.name)
     reference = load_conversation_json(conv_file)
-    
+    reference["filename"] = conv_file.name
     expected_grades = gt["grades"].get(conv_no, {}).get("expectedGrades", [])
     expected_ctqs = gt["assumptions"].get(conv_no, {}).get("expectedCTQs", [])
     all_results = []
@@ -116,6 +116,7 @@ async def run_all_tests_async(num_rounds: int, use_llm_eval: bool, das_env: str,
             if not conv_no: continue
                 
             reference = load_conversation_json(conv_file)
+            reference["filename"] = conv_file.name
             expected_grades = gt["grades"].get(conv_no, {}).get("expectedGrades", [])
             expected_ctqs = gt["assumptions"].get(conv_no, {}).get("expectedCTQs", [])
             
