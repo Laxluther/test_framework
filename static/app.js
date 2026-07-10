@@ -1125,8 +1125,24 @@
     const sessionId = el('dashboard-session-select').value;
     if (!sessionId) return;
     const results = await api('/api/results/' + sessionId);
-    renderHeatmap(results || []);
-    renderDashboardCharts(results || []);
+    const safeResults = results || [];
+    
+    const uniqueConvs = new Set(safeResults.map(r => r.conversation_no || r.conversation_id)).size;
+    const passed = safeResults.filter(r => r.grades_passed).length;
+    const accuracy = safeResults.length > 0 ? ((passed / safeResults.length) * 100).toFixed(1) + '%' : '0%';
+    
+    const validAssumptions = safeResults.filter(r => r.assumptions_score !== null && r.assumptions_score !== undefined);
+    const avgAssumption = validAssumptions.length > 0 ? (validAssumptions.reduce((a, b) => a + b.assumptions_score, 0) / validAssumptions.length).toFixed(1) : '0';
+    
+    const elTotal = el('dash-stat-total');
+    if (elTotal) elTotal.textContent = uniqueConvs;
+    const elAcc = el('dash-stat-accuracy');
+    if (elAcc) elAcc.textContent = accuracy;
+    const elAss = el('dash-stat-assumption');
+    if (elAss) elAss.textContent = avgAssumption;
+
+    renderHeatmap(safeResults);
+    renderDashboardCharts(safeResults);
     show(el('dashboard-content'));
   }
 
