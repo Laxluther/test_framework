@@ -21,6 +21,11 @@
     batchTotal: 0,
     roundSummaries: [],
     sessions: [],
+    single: { startTs: null, endTs: null, turnCount: 0, flowState: 'idle' },
+    singleTimerHandle: null,
+    dashboardAllResults: [],
+    dashboardMaxRounds: 1,
+    dashboardVisibleRounds: 1,
   };
 
   /* ----------------------------------------------------------
@@ -57,6 +62,35 @@
     return createBadge('pending', 'N/A');
   }
 
+  const ICON_CHECK = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+  const ICON_X = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+  const ICON_CHEVRON_RIGHT = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>';
+  const ICON_ARROW_LEFT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;vertical-align:-2px"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>';
+  const ICON_CLOCK = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+  const ICON_MESSAGE = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+  const ICON_COPY = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  const ICON_UPLOAD = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+
+  function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => showToast('Copied to clipboard', 'success'),
+        () => showToast('Copy failed', 'error')
+      );
+    }
+  }
+
+  function conversationIdChipHTML(id) {
+    if (!id) return '<span class="text-muted">—</span>';
+    return '<span class="conv-id-chip" data-copy="' + escapeHtml(id) + '" title="Click to copy — use this ID to look up the trace in MLflow">' +
+      escapeHtml(id) + ICON_COPY + '</span>';
+  }
+
+  function matchIndicatorHTML(matched) {
+    return '<span class="match-indicator ' + (matched ? 'matched' : 'unmatched') + '">' +
+      (matched ? ICON_CHECK : ICON_X) + (matched ? 'Matched' : 'Unmatched') + '</span>';
+  }
+
   function pct(n) {
     if (n == null || isNaN(n)) return '—';
     return (Math.round(n * 100) / 100).toFixed(1) + '%';
@@ -85,8 +119,13 @@
     try {
       const res = await fetch(url, opts);
       if (!res.ok) {
-        const errBody = await res.text();
-        throw new Error(errBody || res.statusText);
+        const errText = await res.text();
+        let message = errText || res.statusText;
+        try {
+          const parsed = JSON.parse(errText);
+          if (parsed && parsed.error) message = parsed.error;
+        } catch { }
+        throw new Error(message);
       }
       return await res.json();
     } catch (e) {
@@ -138,7 +177,8 @@
       'results': 'Results',
       'comparison': 'Comparison',
       'history': 'History Management',
-      'traces': 'MLflow Traces'
+      'traces': 'MLflow Traces',
+      'testdata': 'Test Data'
     };
     const breadcrumb = el('breadcrumb-page');
     if (breadcrumb && pageNames[page]) {
@@ -146,9 +186,10 @@
     }
 
     if (page === 'results') loadResultsSessions();
-    if (page === 'dashboard') loadDashboardSessions();
+    if (page === 'dashboard') { loadDashboardOverview(); loadDashboardSessions(); }
     if (page === 'comparison') loadComparisonSessions();
     if (page === 'history') loadHistorySessions();
+    if (page === 'testdata') loadTestDataList();
   }
 
   /* ----------------------------------------------------------
@@ -160,10 +201,8 @@
       state.config = data;
       populateConversationDropdown();
       populateEnvironmentDropdowns();
-      updateSidebarStatus(true);
-    } catch {
-      updateSidebarStatus(false);
-    }
+      updateBatchRoundsWarning();
+    } catch { }
   }
 
   function populateConversationDropdown() {
@@ -196,11 +235,29 @@
     });
   }
 
-  function updateSidebarStatus(online) {
+  function updateSidebarStatus(online, label) {
     const dot = el('sidebar-status-dot');
     const val = el('sidebar-status-text');
     if (dot) dot.className = 'status-dot' + (online ? '' : ' offline');
-    if (val) val.textContent = online ? 'Connected' : 'Offline';
+    if (val) val.textContent = label || (online ? 'Connected' : 'Offline');
+  }
+
+  async function checkEnvHealth() {
+    const envSelect = el('global-environment');
+    const env = (envSelect && envSelect.value) || 'Local';
+    try {
+      const res = await fetch('/api/health?env=' + encodeURIComponent(env));
+      const data = await res.json();
+      updateSidebarStatus(!!data.healthy, (data.healthy ? env + ' online' : env + ' unreachable'));
+    } catch {
+      updateSidebarStatus(false, 'Server unreachable');
+    }
+  }
+
+  function initEnvHealthCheck() {
+    checkEnvHealth();
+    setInterval(checkEnvHealth, 20000);
+    on('global-environment', 'change', checkEnvHealth);
   }
 
   /* ----------------------------------------------------------
@@ -211,6 +268,32 @@
       state.sseSource.close();
       state.sseSource = null;
     }
+  }
+
+  let sseReconnectTimer = null;
+
+  function scheduleSSEReconnect(handlers) {
+    if (sseReconnectTimer) return;
+    sseReconnectTimer = setTimeout(async () => {
+      sseReconnectTimer = null;
+      if (!state.isRunning) return;
+      try {
+        const data = await api('/api/run/is-running');
+        if (data.running && data.snapshot && data.snapshot.mode === 'batch') {
+          resumeBatchRun(data.snapshot);
+        } else if (data.running && data.snapshot && data.snapshot.mode === 'single') {
+          resumeSingleRun(data.snapshot);
+        } else if (data.running) {
+          connectSSE(handlers);
+        } else {
+          // The run finished or was stopped while we were disconnected.
+          if (state.currentPage === 'batch') finishBatchRun();
+          else finishSingleRun();
+        }
+      } catch {
+        scheduleSSEReconnect(handlers);
+      }
+    }, 3000);
   }
 
   function connectSSE(handlers) {
@@ -228,7 +311,10 @@
       });
     });
     es.onerror = () => {
-      console.warn('SSE connection error');
+      console.warn('SSE connection error, will attempt to resync and reconnect');
+      es.close();
+      if (state.sseSource === es) state.sseSource = null;
+      if (state.isRunning) scheduleSSEReconnect(handlers);
     };
     return es;
   }
@@ -251,6 +337,89 @@
     });
   }
 
+  function formatLatency(ms) {
+    if (ms == null || isNaN(ms)) return null;
+    return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'ms';
+  }
+
+  function addChatTurn(container, role, text, latencyMs) {
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-turn chat-turn-' + role;
+    const latencyLabel = formatLatency(latencyMs);
+    const isSlow = latencyMs != null && latencyMs > 8000;
+    wrap.innerHTML =
+      '<div class="chat-turn-header"><span class="chat-turn-role">' + (role === 'user' ? 'User' : 'Agent') + '</span>' +
+      (latencyLabel ? '<span class="chat-turn-latency' + (isSlow ? ' slow' : '') + '">' + ICON_CLOCK + latencyLabel + '</span>' : '') +
+      '</div>' +
+      '<div class="chat-turn-bubble"></div>';
+    wrap.querySelector('.chat-turn-bubble').textContent = text || '';
+    container.appendChild(wrap);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function addSystemNote(container, text, isError) {
+    const note = document.createElement('div');
+    note.className = 'chat-system-note' + (isError ? ' error' : '');
+    note.textContent = text;
+    container.appendChild(note);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function renderSingleStatusRail() {
+    const rail = el('single-status-rail');
+    if (!rail) return;
+    const s = state.single;
+    const elapsedSecs = s.startTs ? ((s.endTs || Date.now()) - s.startTs) / 1000 : 0;
+    const flowClass = s.flowState === 'pass' ? 'status-pass' : s.flowState === 'fail' ? 'status-fail' : 'status-live';
+    const flowLabel = s.flowState === 'pass' ? 'Flow Complete' : s.flowState === 'fail' ? 'Flow Failed' : s.flowState === 'idle' ? 'Idle' : 'Running';
+    rail.innerHTML =
+      '<span class="status-pill">' + ICON_CLOCK + '<span>' + elapsedSecs.toFixed(1) + 's</span></span>' +
+      '<span class="status-pill">' + ICON_MESSAGE + '<span>Turn ' + s.turnCount + '</span></span>' +
+      '<span class="status-pill ' + flowClass + '">' + flowLabel + '</span>';
+  }
+
+  function getSingleRunHandlers(logArea) {
+    return {
+      round_start(d) {
+        addSystemNote(logArea, 'Round ' + d.round + '/' + (d.total_rounds || 1) + ' started');
+      },
+      file_start(d) {
+        addSystemNote(logArea, 'Processing: ' + d.conv_file + ' (' + d.index + '/' + d.total + ')');
+      },
+      turn_start(d) {
+        state.single.turnCount = d.turn;
+        renderSingleStatusRail();
+        addChatTurn(logArea, 'user', d.user_input, d.latency_ms);
+      },
+      agent_reply(d) {
+        addChatTurn(logArea, 'agent', d.agent_msg, d.latency_ms);
+      },
+      evaluating(d) {
+        addSystemNote(logArea, 'Evaluating conversation #' + d.conv_no + '…');
+      },
+      completed(d) {
+        state.single.flowState = d.success ? 'pass' : 'fail';
+        state.single.endTs = Date.now();
+        renderSingleStatusRail();
+        addSystemNote(logArea, (d.success ? 'PASS' : 'FAIL') + ' — ' + (d.application || d.conv_no), !d.success);
+        if (d.error) addSystemNote(logArea, d.error, true);
+        showSingleResult(d);
+      },
+      run_complete(d) {
+        addSystemNote(logArea, 'Run complete. Output: ' + (d.output_dir || ''));
+        finishSingleRun();
+      },
+      error(d) {
+        addSystemNote(logArea, d.message, true);
+        finishSingleRun();
+      },
+      cancelled(d) {
+        addSystemNote(logArea, 'Cancelled. Completed ' + d.completed + '/' + d.total);
+        finishSingleRun();
+      },
+    };
+  }
+
   async function startSingleRun() {
     const conv = el('single-conversation').value;
     const env = el('global-environment').value;
@@ -269,6 +438,10 @@
     resultCard.classList.remove('visible');
 
     state.isRunning = true;
+    state.single = { startTs: Date.now(), endTs: null, turnCount: 0, flowState: 'running' };
+    renderSingleStatusRail();
+    if (state.singleTimerHandle) clearInterval(state.singleTimerHandle);
+    state.singleTimerHandle = setInterval(renderSingleStatusRail, 200);
 
     try {
       await api('/api/run/single', {
@@ -280,56 +453,49 @@
       btn.disabled = false;
       btn.textContent = 'Run Test';
       state.isRunning = false;
+      clearInterval(state.singleTimerHandle);
       return;
     }
 
-    connectSSE({
-      round_start(d) {
-        addLog(logArea, 'system', 'Round ' + d.round + '/' + d.total_rounds + ' started');
-      },
-      file_start(d) {
-        addLog(logArea, 'info', 'Processing: ' + d.conv_file + ' (' + d.index + '/' + d.total + ')');
-      },
-      turn_start(d) {
-        addLog(logArea, 'user', '[Turn ' + d.turn + '] ' + d.user_input);
-      },
-      agent_reply(d) {
-        addLog(logArea, 'agent', '[Turn ' + d.turn + '] ' + d.agent_msg);
-      },
-      evaluating(d) {
-        addLog(logArea, 'info', 'Evaluating conversation #' + d.conv_no + '…');
-      },
-      completed(d) {
-        const s = d.success ? '✓ PASS' : '✗ FAIL';
-        addLog(logArea, d.success ? 'system' : 'error', s + ' — ' + (d.application || d.conv_no));
-        if (d.error) addLog(logArea, 'error', d.error);
-        showSingleResult(d);
-      },
-      run_complete(d) {
-        addLog(logArea, 'system', 'Run complete. Output: ' + (d.output_dir || ''));
-        finishSingleRun();
-      },
-      error(d) {
-        addLog(logArea, 'error', d.message);
-        finishSingleRun();
-      },
-      cancelled(d) {
-        addLog(logArea, 'system', 'Cancelled. Completed ' + d.completed + '/' + d.total);
-        finishSingleRun();
-      },
-    });
+    connectSSE(getSingleRunHandlers(logArea));
   }
 
-  function addLog(container, type, text) {
-    const entry = document.createElement('div');
-    entry.className = 'log-entry';
-    const labelClass = { user: 'user', agent: 'agent', system: 'system', error: 'error', info: 'info' }[type] || 'info';
-    entry.innerHTML =
-      '<span class="log-timestamp">' + nowTimestamp() + '</span>' +
-      '<span class="log-label ' + labelClass + '">' + type.toUpperCase() + '</span>' +
-      '<span class="log-message">' + escapeHtml(text) + '</span>';
-    container.appendChild(entry);
-    container.scrollTop = container.scrollHeight;
+  function resumeSingleRun(snap) {
+    const btn = el('single-run-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Running…';
+    }
+    show(el('single-stop-btn'));
+
+    const logArea = el('single-log');
+    logArea.innerHTML = '';
+    const resultCard = el('single-result-card');
+    if (resultCard) resultCard.classList.remove('visible');
+
+    state.isRunning = true;
+    state.single = { startTs: Date.now(), endTs: null, turnCount: 0, flowState: 'running' };
+
+    if (snap.round) {
+      addSystemNote(logArea, 'Round ' + snap.round + '/' + (snap.total_rounds || 1) + ' started');
+    }
+    const items = Object.values(snap.items || {});
+    if (items.length > 0) {
+      const item = items[0];
+      (item.logs || []).forEach(l => {
+        if (l.type === 'user' || l.type === 'agent') {
+          addChatTurn(logArea, l.type, (l.text || '').replace(/^\[Turn \d+\]\s*/, ''), l.latencyMs);
+          if (l.type === 'user') state.single.turnCount++;
+        } else {
+          addSystemNote(logArea, l.text);
+        }
+      });
+    }
+    renderSingleStatusRail();
+    if (state.singleTimerHandle) clearInterval(state.singleTimerHandle);
+    state.singleTimerHandle = setInterval(renderSingleStatusRail, 200);
+
+    connectSSE(getSingleRunHandlers(logArea));
   }
 
   function showSingleResult(d) {
@@ -344,6 +510,9 @@
     header.appendChild(badge);
     header.appendChild(h4);
     stats.innerHTML = '';
+    if (d.conversation_id) {
+      stats.innerHTML += '<div class="stat-item"><span class="stat-label">Conversation ID</span>' + conversationIdChipHTML(d.conversation_id) + '</div>';
+    }
     if (d.grades_passed !== undefined) {
       stats.innerHTML += '<div class="stat-item"><span class="stat-label">Grades</span><span class="stat-value ' + (d.grades_passed ? 'pass' : 'fail') + '">' + (d.grades_passed ? 'Passed' : 'Failed') + '</span></div>';
     }
@@ -352,6 +521,14 @@
     }
     if (d.flow_completed !== undefined) {
       stats.innerHTML += '<div class="stat-item"><span class="stat-label">Flow</span><span class="stat-value ' + (d.flow_completed ? 'pass' : 'fail') + '">' + (d.flow_completed ? 'Completed' : 'Incomplete') + '</span></div>';
+    }
+    if (d.timing) {
+      if (d.timing.totalDurationMs != null) {
+        stats.innerHTML += '<div class="stat-item"><span class="stat-label">Total Duration</span><span class="stat-value">' + formatLatency(d.timing.totalDurationMs) + '</span></div>';
+      }
+      if (d.timing.avgTurnLatencyMs != null) {
+        stats.innerHTML += '<div class="stat-item"><span class="stat-label">Avg Response Time</span><span class="stat-value">' + formatLatency(d.timing.avgTurnLatencyMs) + '</span></div>';
+      }
     }
     /* Additional eval details */
     if (details) {
@@ -372,6 +549,7 @@
   function finishSingleRun() {
     closeSSE();
     state.isRunning = false;
+    if (state.singleTimerHandle) { clearInterval(state.singleTimerHandle); state.singleTimerHandle = null; }
     const btn = el('single-run-btn');
     btn.disabled = false;
     btn.textContent = 'Run Test';
@@ -386,9 +564,38 @@
   /* ----------------------------------------------------------
      Batch Run
   ---------------------------------------------------------- */
+  function updateBatchRoundsWarning() {
+    const slider = el('batch-rounds');
+    const valEl = el('batch-rounds-val');
+    const warningEl = el('batch-rounds-warning');
+    if (!slider) return;
+    const rounds = parseInt(slider.value) || 1;
+    if (valEl) valEl.textContent = rounds;
+    if (!warningEl) return;
+    const convCount = (state.config.conversations || []).length;
+    const totalTests = convCount * rounds;
+    if (rounds >= 10 || totalTests >= 100) {
+      warningEl.textContent = '≈ ' + convCount + ' conversations × ' + rounds + ' rounds = ' + totalTests + ' test runs. Each turn calls the LLM — this may take a while.';
+    } else {
+      warningEl.textContent = convCount ? ('≈ ' + convCount + ' conversations × ' + rounds + ' round' + (rounds > 1 ? 's' : '') + ' = ' + totalTests + ' test runs.') : '';
+    }
+  }
+
   function initBatchRun() {
     on('batch-run-btn', 'click', startBatchRun);
     on('batch-stop-btn', 'click', stopBatchRun);
+    on('batch-rounds', 'input', updateBatchRoundsWarning);
+
+    const modeControl = el('batch-execution-mode');
+    if (modeControl) {
+      modeControl.querySelectorAll('.segment').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (state.isRunning) return;
+          modeControl.dataset.value = btn.dataset.mode;
+          modeControl.querySelectorAll('.segment').forEach(b => b.classList.toggle('active', b === btn));
+        });
+      });
+    }
   }
 
   function getBatchHandlers(ctx) {
@@ -403,13 +610,14 @@
         const grid = el('batch-live-grid');
         grid.querySelectorAll('.batch-round-content').forEach(el => el.style.display = 'none');
         
+        const modeLabel = d.execution_mode === 'parallel' ? 'Parallel' : 'Sequential';
         const roundDiv = document.createElement('div');
         roundDiv.className = 'batch-round-group';
         roundDiv.dataset.round = d.round;
-        roundDiv.innerHTML = 
-          '<div class="batch-round-header" style="cursor:pointer; padding:8px 12px; background:var(--bg-secondary); border-radius:6px; margin-bottom:12px; font-weight:600; border:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;" onclick="const content = this.nextElementSibling; content.style.display = content.style.display === \'none\' ? \'grid\' : \'none\'">' +
-          '<span>Round ' + d.round + '</span><span style="font-size:11px; font-weight:normal; color:var(--text-secondary)">(Click to toggle)</span></div>' +
-          '<div class="live-grid batch-round-content" style="display:grid; margin-bottom: 24px;"></div>';
+        roundDiv.innerHTML =
+          '<div class="batch-round-header" onclick="const content = this.nextElementSibling; content.style.display = content.style.display === \'none\' ? \'grid\' : \'none\'">' +
+          '<span>Round ' + d.round + ' &middot; ' + modeLabel + '</span><span style="font-size:11px; font-weight:normal; color:var(--text-secondary)">(Click to toggle)</span></div>' +
+          '<div class="live-grid batch-round-content"></div>';
         
         grid.appendChild(roundDiv);
       },
@@ -420,10 +628,10 @@
         updateBatchProgressText();
       },
       turn_start(d) {
-        addBatchGridLog(d.conv_no, 'user', '[Turn ' + d.turn + '] ' + d.user_input);
+        addBatchGridLog(d.conv_no, 'user', '[Turn ' + d.turn + '] ' + d.user_input, d.latency_ms);
       },
       agent_reply(d) {
-        addBatchGridLog(d.conv_no, 'agent', '[Turn ' + d.turn + '] ' + d.agent_msg);
+        addBatchGridLog(d.conv_no, 'agent', '[Turn ' + d.turn + '] ' + d.agent_msg, d.latency_ms);
       },
       evaluating(d) {
         addOrUpdateGridItem(d.conv_no, null, 'running', 'Evaluating…');
@@ -455,12 +663,14 @@
 
   function resumeBatchRun(snap) {
     if (!snap || snap.mode !== 'batch') return;
-    
+
     el('batch-run-btn').disabled = true;
     el('batch-run-btn').innerHTML = '<span class="spinner"></span> Running…';
     show(el('batch-stop-btn'));
     show(el('batch-progress-area'));
-    
+    setBatchModeControlValue(snap.execution_mode || 'sequential');
+    setBatchModeControlDisabled(true);
+
     state.batchGrid = [];
     state.batchRound = 0;
     state.batchTotalRounds = snap.total_rounds || 1;
@@ -491,7 +701,7 @@
           const item = snap.items[id];
           handlers.file_start({ total: snap.total, conv_no: id, conv_file: item.conv_file });
           item.logs.forEach(l => {
-             addBatchGridLog(id, l.type, l.text);
+             addBatchGridLog(id, l.type, l.text, l.latencyMs);
           });
           if (item.status === 'pass' || item.status === 'fail') {
              handlers.completed({ conv_no: id, application: item.application, success: item.status === 'pass' });
@@ -504,11 +714,14 @@
   async function startBatchRun() {
     const env = el('global-environment').value;
     const rounds = parseInt(el('batch-rounds').value) || 1;
+    const modeControl = el('batch-execution-mode');
+    const executionMode = (modeControl && modeControl.dataset.value) || 'sequential';
 
     el('batch-run-btn').disabled = true;
     el('batch-run-btn').innerHTML = '<span class="spinner"></span> Running…';
     show(el('batch-stop-btn'));
     show(el('batch-progress-area'));
+    setBatchModeControlDisabled(true);
 
     state.isRunning = true;
     state.batchGrid = [];
@@ -526,7 +739,7 @@
       await api('/api/run/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rounds: rounds, environment: env }),
+        body: JSON.stringify({ rounds: rounds, environment: env, execution_mode: executionMode }),
       });
     } catch {
       finishBatchRun();
@@ -574,7 +787,7 @@
     }
   }
 
-  function addBatchGridLog(id, type, text) {
+  function addBatchGridLog(id, type, text, latencyMs) {
     const grid = el('batch-live-grid');
     const roundContent = grid.querySelector('.batch-round-group:last-child .batch-round-content') || grid;
     const item = roundContent.querySelector('[data-grid-id="' + id + '"]');
@@ -582,9 +795,11 @@
     const logArea = item.querySelector('.live-grid-item-log');
     if (!logArea) return;
     const entry = document.createElement('div');
-    entry.style.marginBottom = '4px';
-    const color = type === 'user' ? 'var(--primary-light)' : 'var(--success)';
-    entry.innerHTML = '<span style="color:' + color + '; font-weight:bold;">' + type.toUpperCase() + ':</span> <span style="color:var(--text-secondary)">' + escapeHtml(text) + '</span>';
+    entry.className = 'grid-log-entry';
+    const color = type === 'user' ? 'var(--accent)' : 'var(--success)';
+    const latencyLabel = formatLatency(latencyMs);
+    entry.innerHTML = '<span style="color:' + color + '; font-weight:bold;">' + type.toUpperCase() + ':</span> <span style="color:var(--text-secondary)">' + escapeHtml(text) + '</span>' +
+      (latencyLabel ? '<span class="grid-log-latency">' + ICON_CLOCK + latencyLabel + '</span>' : '');
     logArea.appendChild(entry);
     logArea.scrollTop = logArea.scrollHeight;
   }
@@ -641,6 +856,19 @@
     } catch { }
   }
 
+  function setBatchModeControlDisabled(disabled) {
+    const modeControl = el('batch-execution-mode');
+    if (!modeControl) return;
+    modeControl.querySelectorAll('.segment').forEach(b => { b.disabled = disabled; });
+  }
+
+  function setBatchModeControlValue(mode) {
+    const modeControl = el('batch-execution-mode');
+    if (!modeControl) return;
+    modeControl.dataset.value = mode;
+    modeControl.querySelectorAll('.segment').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  }
+
   function finishBatchRun() {
     closeSSE();
     state.isRunning = false;
@@ -653,6 +881,7 @@
       stopBtn.disabled = false;
       stopBtn.textContent = 'Stop Run';
     }
+    setBatchModeControlDisabled(false);
   }
 
   /* ----------------------------------------------------------
@@ -666,7 +895,7 @@
 
   function renderResultsTables(sessions) {
     const batchSessions = sessions.filter(s => s.unique_convs > 1);
-    const singleSessions = sessions.filter(s => s.unique_convs === 1);
+    const singleSessions = sessions.filter(s => (s.unique_convs || 0) <= 1);
     renderBatchResultsTable(batchSessions);
     renderSingleResultsTable(singleSessions);
   }
@@ -675,7 +904,7 @@
     const tbody = el('results-batch-tbody');
     tbody.innerHTML = '';
     if (sessions.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="table-empty"><div class="empty-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin: 0 auto; opacity: 0.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></div>No batch runs yet</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="table-empty"><div class="empty-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin: 0 auto; opacity: 0.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></div>No batch runs yet</td></tr>';
       return;
     }
     sessions.forEach(s => {
@@ -687,7 +916,8 @@
         '<td>' + escapeHtml(s.das_env || '—') + '</td>' +
         '<td>' + (s.total_iterations || '—') + '</td>' +
         '<td>' + pct(s.grade_accuracy_avg) + '</td>' +
-        '<td>' + scoreDisplay(s.assumption_score_avg) + '</td>';
+        '<td>' + scoreDisplay(s.assumption_score_avg) + '</td>' +
+        '<td class="td-secondary" style="white-space:normal; max-width:200px;">' + escapeHtml(s.notes || '—') + '</td>';
       tr.addEventListener('click', () => openSessionDetail(s.id));
       tbody.appendChild(tr);
     });
@@ -718,20 +948,56 @@
   }
 
   async function openSessionDetail(sessionId) {
-    const data = await api('/api/results/' + sessionId);
-    renderSessionDetailPanel(sessionId, data || []);
+    const [data, sessions] = await Promise.all([
+      api('/api/results/' + sessionId),
+      api('/api/results/sessions'),
+    ]);
+    const sessionMeta = (sessions || []).find(s => s.id === sessionId) || {};
+    renderSessionDetailPanel(sessionId, data || [], sessionMeta);
   }
 
-  function renderSessionDetailPanel(sessionId, results) {
+  function renderSessionNotesEditor(sessionId, sessionMeta) {
+    const section = document.createElement('div');
+    section.className = 'mb-4';
+    section.innerHTML =
+      '<label class="form-label" style="display:block;margin-bottom:6px;">Notes</label>' +
+      '<div style="display:flex; gap:8px;">' +
+      '<input type="text" id="session-notes-input" class="form-input" style="flex:1;" placeholder="e.g. prompt v2.1, after retriever fix" value="' + escapeHtml(sessionMeta.notes || '') + '">' +
+      '<button id="session-notes-save-btn" class="btn btn-secondary btn-sm">Save</button>' +
+      '</div>';
+    setTimeout(() => {
+      const saveBtn = el('session-notes-save-btn');
+      if (!saveBtn) return;
+      saveBtn.addEventListener('click', async () => {
+        const val = el('session-notes-input').value;
+        try {
+          await api('/api/results/notes/' + sessionId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notes: val }),
+          });
+          showToast('Notes saved', 'success');
+        } catch { }
+      });
+    }, 0);
+    return section;
+  }
+
+  function renderSessionDetailPanel(sessionId, results, sessionMeta) {
     const panel = el('detail-panel');
     const overlay = el('detail-overlay');
     const body = el('detail-panel-body');
 
     el('detail-panel-title').textContent = 'Session ' + String(sessionId).substring(0, 8);
     body.innerHTML = '';
+    body.appendChild(renderSessionNotesEditor(sessionId, sessionMeta || {}));
 
     if (results.length === 0) {
-      body.innerHTML = '<p class="text-muted" style="padding:20px">No results found.</p>';
+      const emptyMsg = document.createElement('p');
+      emptyMsg.className = 'text-muted';
+      emptyMsg.style.padding = '20px';
+      emptyMsg.textContent = 'No results found.';
+      body.appendChild(emptyMsg);
     } else {
       // Add Excel Download Button
       const downloadBtn = document.createElement('a');
@@ -743,6 +1009,60 @@
       downloadBtn.target = '_blank';
       downloadBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Excel Report';
       body.appendChild(downloadBtn);
+
+      const regenerateBtn = document.createElement('button');
+      regenerateBtn.className = 'btn btn-secondary btn-sm mb-4';
+      regenerateBtn.style.marginLeft = '8px';
+      regenerateBtn.style.display = 'inline-flex';
+      regenerateBtn.style.alignItems = 'center';
+      regenerateBtn.style.gap = '8px';
+      regenerateBtn.title = 'Rebuild the report from stored results (use if the original report file was lost)';
+      const regenerateIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>';
+      regenerateBtn.innerHTML = regenerateIcon + ' Regenerate Report';
+      regenerateBtn.addEventListener('click', async () => {
+        regenerateBtn.disabled = true;
+        regenerateBtn.innerHTML = '<span class="spinner"></span> Regenerating…';
+        try {
+          await api('/api/report/regenerate/' + sessionId, { method: 'POST' });
+          showToast('Report regenerated', 'success');
+          window.open('/api/report/' + sessionId, '_blank');
+        } catch { } finally {
+          regenerateBtn.disabled = false;
+          regenerateBtn.innerHTML = regenerateIcon + ' Regenerate Report';
+        }
+      });
+      body.appendChild(regenerateBtn);
+
+      const retryBtn = document.createElement('button');
+      retryBtn.className = 'btn btn-secondary btn-sm mb-4';
+      retryBtn.style.marginLeft = '8px';
+      retryBtn.style.display = 'inline-flex';
+      retryBtn.style.alignItems = 'center';
+      retryBtn.style.gap = '8px';
+      retryBtn.title = 'Re-run only the conversations that did not pass in every round, as a new linked session';
+      const retryIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="10 8 16 12 10 16 10 8"/><circle cx="12" cy="12" r="10"/></svg>';
+      retryBtn.innerHTML = retryIcon + ' Retry Failed';
+      retryBtn.addEventListener('click', async () => {
+        if (state.isRunning) { showToast('A test is already running', 'error'); return; }
+        retryBtn.disabled = true;
+        retryBtn.innerHTML = '<span class="spinner"></span> Starting…';
+        try {
+          const env = (el('global-environment') && el('global-environment').value) || 'Local';
+          const data = await api('/api/run/retry-failed/' + sessionId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ environment: env }),
+          });
+          showToast('Retrying ' + (data.retrying_conv_nos || []).length + ' failed conversation(s) — see the Experiments tab', 'success');
+          closeDetailPanel();
+          navigateTo('batch');
+          checkRunningState();
+        } catch { } finally {
+          retryBtn.disabled = false;
+          retryBtn.innerHTML = retryIcon + ' Retry Failed';
+        }
+      });
+      body.appendChild(retryBtn);
 
       const wrapper = document.createElement('div');
       wrapper.className = 'table-wrapper';
@@ -808,18 +1128,26 @@
       ['Round', data.round_no || '—'],
       ['Timestamp', formatDate(data.timestamp)],
       ['Environment', data.das_env || data.environment || '—'],
+      ['Total Duration', data.total_duration_ms != null ? formatLatency(data.total_duration_ms) : '—'],
+      ['Avg Response Time', data.avg_turn_latency_ms != null ? formatLatency(data.avg_turn_latency_ms) : '—'],
+      ['Total Tokens', data.total_tokens != null ? data.total_tokens.toLocaleString() : '—'],
       ['Error', data.error_message || 'None'],
     ];
     fields.forEach(([label, val]) => {
       grid.innerHTML += '<div class="detail-field"><span class="detail-field-label">' + label + '</span><span class="detail-field-value">' + escapeHtml(String(val)) + '</span></div>';
     });
+    if (data.conversation_id) {
+      grid.innerHTML += '<div class="detail-field" style="grid-column: 1 / -1;"><span class="detail-field-label">Conversation ID (for MLflow lookup)</span><span class="detail-field-value">' + conversationIdChipHTML(data.conversation_id) + '</span></div>';
+    }
     overview.appendChild(grid);
     body.appendChild(overview);
 
     /* Grades Section */
     const gradeSection = document.createElement('div');
     gradeSection.className = 'detail-section';
-    gradeSection.innerHTML = '<div class="detail-section-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>Grade Evaluation</div>';
+    gradeSection.innerHTML = '<div class="detail-section-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>Grade Evaluation' +
+      (data.grade_eval_ms != null ? '<span class="status-pill" style="margin-left:8px;text-transform:none;letter-spacing:0">' + ICON_CLOCK + formatLatency(data.grade_eval_ms) + '</span>' : '') +
+      '</div>';
     const gradeInfo = document.createElement('div');
     gradeInfo.className = 'detail-grid mb-4';
     gradeInfo.innerHTML =
@@ -864,7 +1192,9 @@
     /* Assumption Section */
     const assumeSection = document.createElement('div');
     assumeSection.className = 'detail-section';
-    assumeSection.innerHTML = '<div class="detail-section-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>Assumption Evaluation</div>';
+    assumeSection.innerHTML = '<div class="detail-section-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>Assumption Evaluation' +
+      (data.assumption_eval_ms != null ? '<span class="status-pill" style="margin-left:8px;text-transform:none;letter-spacing:0">' + ICON_CLOCK + formatLatency(data.assumption_eval_ms) + '</span>' : '') +
+      '</div>';
     const assumeInfo = document.createElement('div');
     assumeInfo.style.marginBottom = '12px';
     assumeInfo.innerHTML =
@@ -881,7 +1211,7 @@
           const matched = item.matched || item.status === 'matched';
           aDiv.innerHTML =
             '<div class="eval-item-header"><span class="eval-item-title">' + escapeHtml(item.ctq || item.name || 'CTQ') + '</span>' +
-            (matched !== undefined ? '<span>' + (matched ? '✓ Matched' : '✗ Unmatched') + '</span>' : '') +
+            (matched !== undefined ? matchIndicatorHTML(matched) : '') +
             '</div>' +
             '<div class="eval-item-body">' +
             (item.reasoning ? escapeHtml(item.reasoning) : '') +
@@ -906,14 +1236,23 @@
     if (data.actual_turns_json) {
       const turns = typeof data.actual_turns_json === 'string' ? safeJSON(data.actual_turns_json) : data.actual_turns_json;
       if (Array.isArray(turns) && turns.length > 0) {
+        const latencies = turns.map(t => t.latencyMs).filter(v => v != null);
+        const maxLatency = latencies.length > 1 ? Math.max(...latencies) : null;
         turns.forEach(t => {
           const role = (t.role || t.speaker || '').toLowerCase();
           const isUser = role === 'user' || role === 'human';
           const item = document.createElement('div');
           item.className = 'turn-item ' + (isUser ? 'user-turn' : 'agent-turn');
+          const latencyLabel = formatLatency(t.latencyMs);
+          const isSlowest = maxLatency != null && t.latencyMs === maxLatency;
           item.innerHTML =
+            '<div style="display:flex; flex-direction:column; gap:4px; min-width:0; flex:1;">' +
+            '<div style="display:flex; align-items:center; gap:8px;">' +
             '<span class="turn-role ' + (isUser ? 'user' : 'agent') + '">' + (isUser ? 'User' : 'Agent') + '</span>' +
-            '<span class="turn-content">' + escapeHtml(t.content || t.message || t.text || '') + '</span>';
+            (latencyLabel ? '<span class="chat-turn-latency' + (isSlowest ? ' slow' : '') + '">' + ICON_CLOCK + latencyLabel + (isSlowest ? ' (slowest)' : '') + '</span>' : '') +
+            '</div>' +
+            '<span class="turn-content">' + escapeHtml(t.content || t.message || t.text || '') + '</span>' +
+            '</div>';
           turnList.appendChild(item);
         });
       } else {
@@ -973,7 +1312,8 @@
     const traceSection = document.createElement('div');
     traceSection.className = 'detail-section mt-4';
     traceSection.innerHTML = '<div class="detail-section-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>MLflow Traces</div>' +
-      '<p class="text-muted text-sm mb-2">Fetch execution traces from MLflow (Agents, Time taken, Latencies).</p>' +
+      '<p class="text-muted text-sm mb-2">Fetch execution traces from MLflow (tool calls, sub-agent spans, latencies). Use this ID to look the conversation up directly in MLflow too:</p>' +
+      (data.conversation_id ? '<div class="mb-2">' + conversationIdChipHTML(data.conversation_id) + '</div>' : '') +
       '<button id="drill-mlflow-btn" class="btn btn-secondary btn-xs mb-2">Fetch Traces</button>' +
       '<div id="drill-mlflow-results"></div>';
     body.appendChild(traceSection);
@@ -987,14 +1327,9 @@
           try {
             const envParam = data.das_env || data.environment || 'Local';
             const tr = await api('/api/mlflow/traces/' + encodeURIComponent(data.conversation_id) + '?env=' + encodeURIComponent(envParam));
-            el('drill-mlflow-results').innerHTML = '';
-            if(!tr || tr.length === 0) {
-              el('drill-mlflow-results').innerHTML = '<p class="text-muted">No traces found in MLflow for this conversation.</p>';
-            } else {
-              renderTraceSpans(tr, el('drill-mlflow-results'));
-            }
+            renderTraceSpans(tr, el('drill-mlflow-results'));
           } catch (e) {
-            el('drill-mlflow-results').innerHTML = '<p class="text-muted" style="color:var(--danger)">Failed to fetch traces.</p>';
+            el('drill-mlflow-results').innerHTML = '<p class="text-muted" style="color:var(--danger)">Failed to fetch traces: ' + escapeHtml(e.message || 'unknown error') + '</p>';
           }
           fetchBtn.style.display = 'none';
         });
@@ -1031,7 +1366,62 @@
   }
 
   /* Render MLflow traces inside a container (reused in drilldown + traces page) */
+  function spanTypeClass(spanType) {
+    const t = (spanType || '').toUpperCase();
+    if (t === 'TOOL') return 'span-type-tool';
+    if (t === 'AGENT') return 'span-type-agent';
+    if (t === 'LLM' || t === 'CHAT_MODEL') return 'span-type-llm';
+    return 'span-type-other';
+  }
+
+  function buildSpanRow(span) {
+    const item = document.createElement('div');
+    item.className = 'span-item';
+    item.style.paddingLeft = ((span.depth || 0) * 16) + 'px';
+
+    const isError = span.status && span.status !== 'OK' && span.status !== 'UNSET';
+    const barClass = isError ? 'error' : 'ok';
+    const offsetPct = Math.max(0, span._offsetPct || 0);
+    const widthPct = Math.max(0.6, span._widthPct || 0);
+    const hasIO = !!(span.inputs || span.outputs);
+
+    item.innerHTML =
+      '<div class="span-item-main">' +
+      '<span class="span-type-tag ' + spanTypeClass(span.span_type) + '">' + escapeHtml((span.span_type || 'STEP').replace(/_/g, ' ')) + '</span>' +
+      '<span class="span-name" title="' + escapeHtml(span.name || '') + '">' + escapeHtml(span.name || '') + '</span>' +
+      '<div class="span-duration-bar"><div class="duration-bar-container">' +
+      '<div class="duration-bar-track"><div class="duration-bar-fill ' + barClass + '" style="margin-left:' + offsetPct + '%; width:' + widthPct + '%"></div></div>' +
+      '<span class="duration-value">' + (span.duration_ms != null ? formatLatency(span.duration_ms) : '—') + '</span>' +
+      '</div></div>' +
+      (hasIO ? '<span class="span-io-toggle">' + ICON_CHEVRON_RIGHT + '</span>' : '') +
+      '</div>';
+
+    if (hasIO) {
+      const ioPanel = document.createElement('div');
+      ioPanel.className = 'span-io-panel';
+      ioPanel.innerHTML =
+        (span.inputs ? '<div class="span-io-block"><div class="span-io-label">Input</div><pre class="span-io-content"></pre></div>' : '') +
+        (span.outputs ? '<div class="span-io-block"><div class="span-io-label">Output</div><pre class="span-io-content"></pre></div>' : '');
+      const contentEls = ioPanel.querySelectorAll('.span-io-content');
+      let ci = 0;
+      if (span.inputs) contentEls[ci++].textContent = span.inputs;
+      if (span.outputs) contentEls[ci++].textContent = span.outputs;
+      item.appendChild(ioPanel);
+      item.classList.add('has-io');
+      item.querySelector('.span-item-main').addEventListener('click', () => {
+        item.classList.toggle('io-open');
+        const toggle = item.querySelector('.span-io-toggle');
+        if (toggle) toggle.classList.toggle('expanded');
+      });
+    }
+    return item;
+  }
+
   function renderTraceSpans(data, container) {
+    if (data && data.error) {
+      container.innerHTML = '<p class="text-muted" style="color:var(--danger)">' + escapeHtml(data.error) + '</p>';
+      return;
+    }
     if (!data || (!data.traces && !Array.isArray(data))) {
       container.innerHTML = '<p class="text-muted">No trace data available.</p>';
       return;
@@ -1041,25 +1431,27 @@
       container.innerHTML = '<p class="text-muted">No traces found.</p>';
       return;
     }
-    let maxDuration = 0;
-    traces.forEach(t => {
-      if (t.total_duration_ms > maxDuration) maxDuration = t.total_duration_ms;
-      if (t.spans) t.spans.forEach(s => { if (s.duration_ms > maxDuration) maxDuration = s.duration_ms; });
-    });
-    if (maxDuration === 0) maxDuration = 1;
 
     traces.forEach(trace => {
+      const spans = trace.spans || [];
+      const computedExtent = spans.reduce((m, s) => Math.max(m, (s.start_offset_ms || 0) + (s.duration_ms || 0)), 0);
+      const traceDurationMs = trace.total_duration_ms || computedExtent || 1;
+      spans.forEach(s => {
+        s._offsetPct = ((s.start_offset_ms || 0) / traceDurationMs) * 100;
+        s._widthPct = ((s.duration_ms || 0) / traceDurationMs) * 100;
+      });
+
       const card = document.createElement('div');
       card.className = 'trace-card';
       const header = document.createElement('div');
       header.className = 'trace-header';
       header.innerHTML =
         '<div class="trace-header-left">' +
-        '<span class="trace-expand-icon">▶</span>' +
+        '<span class="trace-expand-icon">' + ICON_CHEVRON_RIGHT + '</span>' +
         '<span class="trace-id">' + escapeHtml(String(trace.trace_id || '').substring(0, 12)) + '</span>' +
         '</div>' +
         '<div class="trace-header-right">' +
-        '<span>' + (trace.total_duration_ms || 0) + 'ms</span>' +
+        '<span>' + (trace.total_duration_ms != null ? formatLatency(trace.total_duration_ms) : '—') + '</span>' +
         '</div>';
       const sBadge = (trace.status === 'OK' || trace.status === 'ok')
         ? createBadge('pass', trace.status)
@@ -1068,20 +1460,8 @@
 
       const body = document.createElement('div');
       body.className = 'trace-body';
-      if (trace.spans && trace.spans.length > 0) {
-        trace.spans.forEach(span => {
-          const spanEl = document.createElement('div');
-          spanEl.className = 'span-item';
-          const pctWidth = maxDuration > 0 ? (span.duration_ms / maxDuration * 100) : 0;
-          const barClass = (span.status === 'OK' || span.status === 'ok' || !span.status) ? 'ok' : 'error';
-          spanEl.innerHTML =
-            '<span class="span-name" title="' + escapeHtml(span.name) + '">' + escapeHtml(span.name) + '</span>' +
-            '<div class="span-duration-bar"><div class="duration-bar-container">' +
-            '<div class="duration-bar-track"><div class="duration-bar-fill ' + barClass + '" style="width:' + pctWidth + '%"></div></div>' +
-            '<span class="duration-value">' + (span.duration_ms || 0) + 'ms</span>' +
-            '</div></div>';
-          body.appendChild(spanEl);
-        });
+      if (spans.length > 0) {
+        spans.forEach(span => body.appendChild(buildSpanRow(span)));
       } else {
         body.innerHTML = '<p class="text-muted text-sm" style="padding:8px 0">No spans recorded.</p>';
       }
@@ -1103,6 +1483,81 @@
   /* ----------------------------------------------------------
      Dashboard Page
   ---------------------------------------------------------- */
+  function sessionPassRate(s) {
+    if (s.grade_accuracy_avg != null) return s.grade_accuracy_avg;
+    if (s.single_grade_passed != null) return s.single_grade_passed ? 100 : 0;
+    return null;
+  }
+
+  async function loadDashboardOverview() {
+    let sessions;
+    try {
+      sessions = await api('/api/results/sessions');
+    } catch {
+      return;
+    }
+    sessions = sessions || [];
+
+    el('ov-stat-total-runs').textContent = sessions.length;
+
+    const latest = sessions[0];
+    const latestPass = latest ? sessionPassRate(latest) : null;
+    el('ov-stat-latest-pass').textContent = latestPass != null ? pct(latestPass) : '—';
+
+    const assumptionScores = sessions.map(s => s.assumption_score_avg).filter(v => v != null);
+    const avgAssumption = assumptionScores.length ? assumptionScores.reduce((a, b) => a + b, 0) / assumptionScores.length : null;
+    el('ov-stat-assumption').textContent = avgAssumption != null ? scoreDisplay(avgAssumption) : '—';
+
+    const latencies = sessions.map(s => s.avg_latency_ms).filter(v => v != null);
+    const avgLatency = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null;
+    el('ov-stat-latency').textContent = avgLatency != null ? formatLatency(avgLatency) : '—';
+
+    renderOverviewTrend(sessions.slice(0, 10));
+    renderRecentRunsTable(sessions.slice(0, 10));
+  }
+
+  function renderOverviewTrend(recentSessions) {
+    const container = el('ov-trend-chart');
+    if (!recentSessions.length) {
+      container.innerHTML = '<p class="text-muted text-sm">No runs yet.</p>';
+      return;
+    }
+    const chronological = recentSessions.slice().reverse();
+    container.innerHTML = '';
+    chronological.forEach(s => {
+      const rate = sessionPassRate(s);
+      const rateVal = rate != null ? rate : 0;
+      container.innerHTML +=
+        '<div class="bar-row">' +
+        '<span class="bar-label" title="' + formatDate(s.timestamp) + '">' + String(s.id).substring(0, 8) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill ' + (rateVal >= 70 ? 'green' : 'blue') + '" style="width:' + rateVal + '%"></div></div>' +
+        '<span class="bar-value">' + (rate != null ? rate.toFixed(0) + '%' : '—') + '</span>' +
+        '</div>';
+    });
+  }
+
+  function renderRecentRunsTable(recentSessions) {
+    const tbody = el('ov-recent-runs-tbody');
+    tbody.innerHTML = '';
+    if (!recentSessions.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No runs yet. Start one from the Run or Experiments page.</td></tr>';
+      return;
+    }
+    recentSessions.forEach(s => {
+      const tr = document.createElement('tr');
+      tr.className = 'clickable';
+      tr.innerHTML =
+        '<td class="td-mono">' + escapeHtml(String(s.id).substring(0, 8)) + '</td>' +
+        '<td>' + formatDate(s.timestamp) + '</td>' +
+        '<td>' + escapeHtml(s.das_env || '—') + '</td>' +
+        '<td>' + pct(s.grade_accuracy_avg) + '</td>' +
+        '<td>' + scoreDisplay(s.assumption_score_avg) + '</td>' +
+        '<td>' + (s.avg_latency_ms != null ? formatLatency(s.avg_latency_ms) : '—') + '</td>';
+      tr.addEventListener('click', () => openSessionDetail(s.id));
+      tbody.appendChild(tr);
+    });
+  }
+
   async function loadDashboardSessions() {
     const data = await api('/api/results/sessions');
     const sel = el('dashboard-session-select');
@@ -1119,31 +1574,150 @@
   function initDashboard() {
     on('dashboard-session-select', 'change', loadDashboardData);
     on('dashboard-load-btn', 'click', loadDashboardData);
+    on('dash-rounds-minus', 'click', () => {
+      if (state.dashboardVisibleRounds > 1) {
+        state.dashboardVisibleRounds--;
+        renderDashboardForVisibleRounds();
+      }
+    });
+    on('dash-rounds-plus', 'click', () => {
+      if (state.dashboardVisibleRounds < state.dashboardMaxRounds) {
+        state.dashboardVisibleRounds++;
+        renderDashboardForVisibleRounds();
+      }
+    });
   }
 
   async function loadDashboardData() {
     const sessionId = el('dashboard-session-select').value;
     if (!sessionId) return;
     const results = await api('/api/results/' + sessionId);
-    const safeResults = results || [];
-    
-    const uniqueConvs = new Set(safeResults.map(r => r.conversation_no || r.conversation_id)).size;
-    const passed = safeResults.filter(r => r.grades_passed).length;
-    const accuracy = safeResults.length > 0 ? ((passed / safeResults.length) * 100).toFixed(1) + '%' : '0%';
-    
-    const validAssumptions = safeResults.filter(r => r.assumptions_score !== null && r.assumptions_score !== undefined);
+    state.dashboardAllResults = results || [];
+
+    const roundNos = state.dashboardAllResults.map(r => r.round_no).filter(n => n != null);
+    state.dashboardMaxRounds = roundNos.length ? Math.max(...roundNos) : 1;
+    state.dashboardVisibleRounds = state.dashboardMaxRounds;
+
+    renderDashboardForVisibleRounds();
+    show(el('dashboard-content'));
+  }
+
+  function renderDashboardForVisibleRounds() {
+    const allResults = state.dashboardAllResults || [];
+    const visible = state.dashboardVisibleRounds || 1;
+    const maxRounds = state.dashboardMaxRounds || 1;
+    const filtered = allResults.filter(r => (r.round_no || 1) <= visible);
+
+    const uniqueConvs = new Set(filtered.map(r => r.conversation_no || r.conversation_id)).size;
+    const passed = filtered.filter(r => r.grades_passed).length;
+    const accuracy = filtered.length > 0 ? ((passed / filtered.length) * 100).toFixed(1) + '%' : '0%';
+
+    const validAssumptions = filtered.filter(r => r.assumptions_score !== null && r.assumptions_score !== undefined);
     const avgAssumption = validAssumptions.length > 0 ? (validAssumptions.reduce((a, b) => a + b.assumptions_score, 0) / validAssumptions.length).toFixed(1) : '0';
-    
+
     const elTotal = el('dash-stat-total');
     if (elTotal) elTotal.textContent = uniqueConvs;
-    const elAcc = el('dash-stat-accuracy');
+    const elAcc = el('dash-stat-acc');
     if (elAcc) elAcc.textContent = accuracy;
-    const elAss = el('dash-stat-assumption');
+    const elAss = el('dash-stat-score');
     if (elAss) elAss.textContent = avgAssumption;
 
-    renderHeatmap(safeResults);
-    renderDashboardCharts(safeResults);
-    show(el('dashboard-content'));
+    renderHeatmap(filtered);
+    renderDashboardCharts(filtered);
+    renderFlakiness(filtered);
+    renderFailureClusters(filtered);
+
+    const display = el('dash-rounds-display');
+    if (display) display.textContent = 'round 1 – ' + visible + ' of ' + maxRounds;
+    const minusBtn = el('dash-rounds-minus');
+    const plusBtn = el('dash-rounds-plus');
+    if (minusBtn) minusBtn.disabled = visible <= 1;
+    if (plusBtn) plusBtn.disabled = visible >= maxRounds;
+  }
+
+  function renderFlakiness(results) {
+    const container = el('dashboard-flakiness');
+    if (!container) return;
+
+    const byApp = {};
+    results.forEach(r => {
+      const key = r.application_name || r.conversation_id;
+      if (!byApp[key]) byApp[key] = { passCount: 0, total: 0, rounds: [] };
+      byApp[key].total++;
+      if (r.grades_passed) byApp[key].passCount++;
+      byApp[key].rounds.push({ round: r.round_no, passed: !!r.grades_passed });
+    });
+
+    const flaky = Object.keys(byApp)
+      .map(key => {
+        const b = byApp[key];
+        return { app: key, passCount: b.passCount, total: b.total, rounds: b.rounds, rate: (b.passCount / b.total) * 100 };
+      })
+      .filter(x => x.total > 1 && x.rate > 0 && x.rate < 100)
+      .sort((a, b) => a.rate - b.rate);
+
+    if (flaky.length === 0) {
+      container.innerHTML = '<p class="text-muted text-sm">No flaky conversations in the selected rounds — results are consistent.</p>';
+      return;
+    }
+
+    container.innerHTML = '';
+    flaky.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'flakiness-row';
+      const dots = item.rounds
+        .slice()
+        .sort((a, b) => (a.round || 0) - (b.round || 0))
+        .map(r => '<span class="flakiness-dot ' + (r.passed ? 'pass' : 'fail') + '" title="Round ' + r.round + ': ' + (r.passed ? 'PASS' : 'FAIL') + '"></span>')
+        .join('');
+      row.innerHTML =
+        '<span class="flakiness-app">' + escapeHtml(item.app) + '</span>' +
+        '<span class="flakiness-dots">' + dots + '</span>' +
+        '<span class="flakiness-rate">' + item.rate.toFixed(0) + '% (' + item.passCount + '/' + item.total + ')</span>';
+      container.appendChild(row);
+    });
+  }
+
+  function categorizeFailure(r) {
+    if (r.grades_passed && r.flow_completed) return null;
+    const err = (r.error_message || '').trim();
+    if (err.indexOf('DAS API error') === 0) return 'DAS API Error';
+    if (err.indexOf('Simulator agent error') === 0) return 'Simulator Agent Error';
+    if (!r.flow_completed && !err) return 'Max Turns Reached';
+    if (r.flow_completed && !r.grades_passed) return 'Grade Mismatch';
+    if (err) return 'Other Error';
+    return 'Unknown Failure';
+  }
+
+  function renderFailureClusters(results) {
+    const container = el('dashboard-failure-clusters');
+    if (!container) return;
+
+    const counts = {};
+    results.forEach(r => {
+      const cat = categorizeFailure(r);
+      if (!cat) return;
+      counts[cat] = (counts[cat] || 0) + 1;
+    });
+
+    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    if (entries.length === 0) {
+      container.innerHTML = '<p class="text-muted text-sm">No failures in the selected rounds.</p>';
+      return;
+    }
+
+    const maxCount = Math.max(...entries.map(e => e[1]));
+    container.innerHTML = '';
+    entries.forEach(([cat, count]) => {
+      const pctWidth = maxCount > 0 ? (count / maxCount) * 100 : 0;
+      const row = document.createElement('div');
+      row.className = 'bar-row';
+      row.innerHTML =
+        '<span class="bar-label" style="width:160px;">' + escapeHtml(cat) + '</span>' +
+        '<div class="bar-track"><div class="bar-fill red" style="width:' + pctWidth + '%"></div></div>' +
+        '<span class="bar-value">' + count + '</span>';
+      container.appendChild(row);
+    });
   }
 
   function renderHeatmap(results) {
@@ -1271,20 +1845,6 @@
   /* ----------------------------------------------------------
      Comparison Page
   ---------------------------------------------------------- */
-  async function loadComparisonSessions() {
-    const data = await api('/api/results/sessions');
-    ['comparison-session-a', 'comparison-session-b'].forEach(id => {
-      const sel = el(id);
-      sel.innerHTML = '<option value="">Select session…</option>';
-      (data || []).forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = String(s.id).substring(0, 8) + ' — ' + formatDate(s.timestamp);
-        sel.appendChild(opt);
-      });
-    });
-  }
-
   function initComparison() {
     on('compare-btn', 'click', runComparison);
   }
@@ -1314,71 +1874,86 @@
     renderComparisonTable(data);
   }
 
+  function trendIcon(direction) {
+    if (direction === 'up') {
+      return '<svg class="trend-icon trend-up" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+    }
+    if (direction === 'down') {
+      return '<svg class="trend-icon trend-down" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>';
+    }
+    return '<svg class="trend-icon trend-flat" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+  }
+
+  function aggregateComparisonByApp(results) {
+    const byApp = {};
+    results.forEach(r => {
+      const key = r.application_name || r.conversation_id;
+      if (!byApp[key]) byApp[key] = { passCount: 0, total: 0, scores: [] };
+      byApp[key].total++;
+      if (r.grades_passed && r.flow_completed) byApp[key].passCount++;
+      if (r.assumptions_score != null) byApp[key].scores.push(r.assumptions_score);
+    });
+    const out = {};
+    Object.keys(byApp).forEach(key => {
+      const b = byApp[key];
+      out[key] = {
+        passRate: b.total > 0 ? (b.passCount / b.total) * 100 : null,
+        avgScore: b.scores.length ? b.scores.reduce((a, c) => a + c, 0) / b.scores.length : null,
+        rounds: b.total
+      };
+    });
+    return out;
+  }
+
   function renderComparisonTable(data) {
-    const container = el('comparison-results');
-    container.innerHTML = '';
+    const summaryEl = el('compare-summary');
+    const resultsEl = el('compare-results');
+    const tbody = el('compare-tbody');
+    tbody.innerHTML = '';
 
-    const sessionA = data.session_a || [];
-    const sessionB = data.session_b || [];
-
-    const appsA = {};
-    sessionA.forEach(r => { appsA[r.application_name || r.conversation_id] = r; });
-    const appsB = {};
-    sessionB.forEach(r => { appsB[r.application_name || r.conversation_id] = r; });
+    const appsA = aggregateComparisonByApp(data.session_a || []);
+    const appsB = aggregateComparisonByApp(data.session_b || []);
     const allApps = [...new Set([...Object.keys(appsA), ...Object.keys(appsB)])].sort();
 
     let improved = 0, regressed = 0, unchanged = 0;
 
-    const wrapper = document.createElement('div');
-    wrapper.className = 'table-wrapper';
-    const table = document.createElement('table');
-    table.innerHTML = '<thead><tr><th>Application</th><th>Base</th><th>Compare</th><th>Change</th></tr></thead>';
-    const tbody = document.createElement('tbody');
-
     allApps.forEach(app => {
       const rA = appsA[app];
       const rB = appsB[app];
-      const passA = rA ? (rA.grades_passed && rA.flow_completed) : null;
-      const passB = rB ? (rB.grades_passed && rB.flow_completed) : null;
+      const rateA = rA ? rA.passRate : null;
+      const rateB = rB ? rB.passRate : null;
 
-      let changeText, changeClass;
-      if (passA === passB || (passA == null && passB == null)) {
-        changeText = '= Same';
-        changeClass = 'change-unchanged';
-        unchanged++;
-      } else if (!passA && passB) {
-        changeText = '↑ Improved';
-        changeClass = 'change-improved';
-        improved++;
-      } else if (passA && !passB) {
-        changeText = '↓ Regressed';
-        changeClass = 'change-regressed';
-        regressed++;
+      let changeClass, icon, changeLabel;
+      if (rateA == null || rateB == null) {
+        changeClass = 'change-unchanged'; icon = 'flat'; changeLabel = 'N/A'; unchanged++;
+      } else if (rateB > rateA) {
+        changeClass = 'change-improved'; icon = 'up'; changeLabel = 'Improved'; improved++;
+      } else if (rateB < rateA) {
+        changeClass = 'change-regressed'; icon = 'down'; changeLabel = 'Regressed'; regressed++;
       } else {
-        changeText = '= Same';
-        changeClass = 'change-unchanged';
-        unchanged++;
+        changeClass = 'change-unchanged'; icon = 'flat'; changeLabel = 'Same'; unchanged++;
       }
 
+      const baseLabel = rateA != null ? pct(rateA) + (rA.rounds > 1 ? ' (' + rA.rounds + 'r)' : '') : '—';
+      const compareLabel = rateB != null ? pct(rateB) + (rB.rounds > 1 ? ' (' + rB.rounds + 'r)' : '') : '—';
+
       const tr = document.createElement('tr');
-      tr.innerHTML = '<td>' + escapeHtml(app) + '</td><td></td><td></td><td class="' + changeClass + '">' + changeText + '</td>';
-      if (passA !== null) tr.cells[1].appendChild(statusBadge(passA));
-      else tr.cells[1].textContent = '—';
-      if (passB !== null) tr.cells[2].appendChild(statusBadge(passB));
-      else tr.cells[2].textContent = '—';
+      tr.innerHTML =
+        '<td>' + escapeHtml(app) + '</td>' +
+        '<td>' + baseLabel + '</td>' +
+        '<td>' + compareLabel + '</td>' +
+        '<td>' + (rA && rA.avgScore != null ? scoreDisplay(rA.avgScore) : '—') + '</td>' +
+        '<td>' + (rB && rB.avgScore != null ? scoreDisplay(rB.avgScore) : '—') + '</td>' +
+        '<td class="' + changeClass + '" style="display:flex;align-items:center;gap:6px">' + trendIcon(icon) + '<span>' + changeLabel + '</span></td>';
       tbody.appendChild(tr);
     });
-    table.appendChild(tbody);
-    wrapper.appendChild(table);
-    container.appendChild(wrapper);
 
-    const summary = document.createElement('div');
-    summary.style.cssText = 'margin-top:16px;font-size:13px;color:#6b7280';
-    summary.innerHTML =
-      '<strong class="change-improved">' + improved + ' improved</strong>, ' +
-      '<strong class="change-regressed">' + regressed + ' regressed</strong>, ' +
+    summaryEl.innerHTML =
+      '<strong class="change-improved">' + improved + ' improved</strong>&nbsp;&bull;&nbsp;' +
+      '<strong class="change-regressed">' + regressed + ' regressed</strong>&nbsp;&bull;&nbsp;' +
       '<strong class="change-unchanged">' + unchanged + ' unchanged</strong>';
-    container.appendChild(summary);
+    show(summaryEl);
+    show(resultsEl);
   }
 
   /* ----------------------------------------------------------
@@ -1398,7 +1973,7 @@
   function initHistory() {
     on('history-delete-all-btn', 'click', () => {
       openConfirmModal('Delete All Sessions', 'Are you sure you want to delete all sessions? This action cannot be undone.', async () => {
-        const sessions = state.sessions.length > 0 ? state.sessions : (await api('/api/results/sessions')) || [];
+        const sessions = (await api('/api/results/sessions')) || [];
         for (const s of sessions) {
           try { await api('/api/results/delete/' + s.id, { method: 'DELETE' }); } catch { }
         }
@@ -1459,7 +2034,7 @@
     const header = document.createElement('div');
     header.className = 'flex justify-between items-center mb-4';
     header.innerHTML = '<h3 style="font-size:15px;font-weight:700">Session ' + String(sessionId).substring(0, 8) + ' — Results</h3>' +
-      '<button class="btn btn-sm btn-secondary" id="history-detail-back">← Back</button>';
+      '<button class="btn btn-sm btn-secondary" id="history-detail-back">' + ICON_ARROW_LEFT + 'Back</button>';
     container.appendChild(header);
 
     hide(mainTable);
@@ -1592,82 +2167,347 @@
     meta.innerHTML = '';
     area.classList.remove('hidden');
 
-    if (!data || !data.traces || data.traces.length === 0) {
-      container.innerHTML = '<p class="text-muted" style="padding:20px">No traces found.</p>';
+    if (!(data && data.error) && data && data.traces && data.traces.length > 0) {
+      meta.innerHTML = 'Experiment: <strong>' + escapeHtml(data.experiment_name || '—') + '</strong> &nbsp;&bull;&nbsp; Total Traces: <strong>' + (data.total_traces || data.traces.length) + '</strong>';
+    }
+    renderTraceSpans(data, container);
+  }
+
+  /* ----------------------------------------------------------
+     Test Data Page
+  ---------------------------------------------------------- */
+  function coverageIconHTML(has) {
+    return has
+      ? '<span class="td-coverage-icon yes" title="Present">' + ICON_CHECK + '</span>'
+      : '<span class="td-coverage-icon no" title="Missing">' + ICON_X + '</span>';
+  }
+
+  async function loadTestDataList() {
+    let convs;
+    try {
+      convs = await api('/api/testdata/conversations');
+    } catch { return; }
+    renderTestDataTable(convs || []);
+  }
+
+  function renderTestDataTable(convs) {
+    const tbody = el('testdata-tbody');
+    tbody.innerHTML = '';
+    if (convs.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="table-empty">No test conversations found.</td></tr>';
       return;
     }
+    convs.forEach(c => {
+      const tr = document.createElement('tr');
+      tr.className = 'clickable';
+      tr.innerHTML =
+        '<td class="td-mono">' + c.conversationNo + '</td>' +
+        '<td>' + escapeHtml(c.application) + '</td>' +
+        '<td>' + escapeHtml(c.industry || '—') + '</td>' +
+        '<td>' + c.turnCount + '</td>' +
+        '<td></td><td></td>' +
+        '<td class="btn-group"></td>';
+      tr.cells[4].innerHTML = coverageIconHTML(c.hasExpectedGrades);
+      tr.cells[5].innerHTML = coverageIconHTML(c.hasExpectedCTQs);
 
-    meta.innerHTML = 'Experiment: <strong>' + escapeHtml(data.experiment_name || '—') + '</strong> &nbsp;&bull;&nbsp; Total Traces: <strong>' + (data.total_traces || data.traces.length) + '</strong>';
+      const viewBtn = document.createElement('button');
+      viewBtn.className = 'btn btn-xs btn-secondary';
+      viewBtn.textContent = 'View';
+      viewBtn.addEventListener('click', (e) => { e.stopPropagation(); openTestDataView(c.conversationNo); });
 
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn btn-xs btn-secondary';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', (e) => { e.stopPropagation(); openTestDataForm(c.conversationNo); });
 
-
-    let maxDuration = 0;
-    data.traces.forEach(t => {
-      if (t.total_duration_ms > maxDuration) maxDuration = t.total_duration_ms;
-      if (t.spans) {
-        t.spans.forEach(s => {
-          if (s.duration_ms > maxDuration) maxDuration = s.duration_ms;
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-xs btn-danger';
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openConfirmModal('Delete Conversation', 'Delete "' + c.application + '" and its ground truth entries? A backup is kept, but this removes it from active testing.', async () => {
+          await api('/api/testdata/conversations/' + c.conversationNo, { method: 'DELETE' });
+          showToast('Conversation deleted', 'success');
+          loadTestDataList();
         });
-      }
-    });
-    if (maxDuration === 0) maxDuration = 1;
-
-    data.traces.forEach(trace => {
-      const card = document.createElement('div');
-      card.className = 'trace-card';
-
-      const header = document.createElement('div');
-      header.className = 'trace-header';
-      header.innerHTML =
-        '<div class="trace-header-left">' +
-        '<span class="trace-expand-icon">▶</span>' +
-        '<span class="trace-id">' + escapeHtml(String(trace.trace_id || '').substring(0, 12)) + '</span>' +
-        '</div>' +
-        '<div class="trace-header-right">' +
-        '<span>' + (trace.total_duration_ms || 0) + 'ms</span>' +
-        '</div>';
-
-      const statusBadgeEl = trace.status === 'OK' || trace.status === 'ok'
-        ? createBadge('pass', trace.status)
-        : createBadge('fail', trace.status || 'ERROR');
-      header.querySelector('.trace-header-right').prepend(statusBadgeEl);
-
-      const body = document.createElement('div');
-      body.className = 'trace-body';
-
-      if (trace.spans && trace.spans.length > 0) {
-        trace.spans.forEach(span => {
-          const spanEl = document.createElement('div');
-          spanEl.className = 'span-item';
-          const pctWidth = maxDuration > 0 ? (span.duration_ms / maxDuration * 100) : 0;
-          const barClass = (span.status === 'OK' || span.status === 'ok' || !span.status) ? 'ok' : 'error';
-          spanEl.innerHTML =
-            '<span class="span-name" title="' + escapeHtml(span.name) + '">' + escapeHtml(span.name) + '</span>' +
-            '<div class="span-duration-bar"><div class="duration-bar-container">' +
-            '<div class="duration-bar-track"><div class="duration-bar-fill ' + barClass + '" style="width:' + pctWidth + '%"></div></div>' +
-            '<span class="duration-value">' + (span.duration_ms || 0) + 'ms</span>' +
-            '</div></div>';
-
-          if (span.status && span.status !== 'OK' && span.status !== 'ok') {
-            const sBadge = createBadge('fail', span.status);
-            sBadge.style.marginLeft = '8px';
-            spanEl.appendChild(sBadge);
-          }
-          body.appendChild(spanEl);
-        });
-      } else {
-        body.innerHTML = '<p class="text-muted text-sm" style="padding:8px 0">No spans recorded.</p>';
-      }
-
-      header.addEventListener('click', () => {
-        body.classList.toggle('open');
-        header.querySelector('.trace-expand-icon').classList.toggle('expanded');
       });
 
-      card.appendChild(header);
-      card.appendChild(body);
-      container.appendChild(card);
+      tr.cells[6].appendChild(viewBtn);
+      tr.cells[6].appendChild(editBtn);
+      tr.cells[6].appendChild(delBtn);
+      tr.addEventListener('click', () => openTestDataView(c.conversationNo));
+      tbody.appendChild(tr);
     });
+  }
+
+  async function openTestDataView(convNo) {
+    let data;
+    try {
+      data = await api('/api/testdata/conversations/' + convNo);
+    } catch { return; }
+
+    const panel = el('detail-panel');
+    const body = el('detail-panel-body');
+    el('detail-panel-title').textContent = data.application + ' (#' + convNo + ')';
+    body.innerHTML = '';
+
+    const overview = document.createElement('div');
+    overview.className = 'detail-section';
+    overview.innerHTML =
+      '<div class="detail-grid">' +
+      '<div class="detail-field"><span class="detail-field-label">Application</span><span class="detail-field-value">' + escapeHtml(data.application) + '</span></div>' +
+      '<div class="detail-field"><span class="detail-field-label">Industry</span><span class="detail-field-value">' + escapeHtml(data.industry || '—') + '</span></div>' +
+      '</div>';
+    body.appendChild(overview);
+
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'mb-4';
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn btn-secondary btn-sm';
+    editBtn.textContent = 'Edit';
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'btn btn-danger btn-sm';
+    deleteBtn.style.marginLeft = '8px';
+    deleteBtn.textContent = 'Delete';
+    actionsRow.appendChild(editBtn);
+    actionsRow.appendChild(deleteBtn);
+    body.appendChild(actionsRow);
+
+    const turnsSection = document.createElement('div');
+    turnsSection.className = 'detail-section';
+    turnsSection.innerHTML = '<div class="detail-section-title">Conversation Turns</div>';
+    const turnList = document.createElement('div');
+    turnList.className = 'turn-list';
+    (data.turns || []).forEach(t => {
+      const isUser = t.role === 'user';
+      const item = document.createElement('div');
+      item.className = 'turn-item ' + (isUser ? 'user-turn' : 'agent-turn');
+      const roleSpan = document.createElement('span');
+      roleSpan.className = 'turn-role ' + (isUser ? 'user' : 'agent');
+      roleSpan.textContent = isUser ? 'User' : 'Agent';
+      const contentSpan = document.createElement('span');
+      contentSpan.className = 'turn-content';
+      contentSpan.textContent = t.content || '';
+      item.appendChild(roleSpan);
+      item.appendChild(contentSpan);
+      turnList.appendChild(item);
+    });
+    turnsSection.appendChild(turnList);
+    body.appendChild(turnsSection);
+
+    function renderStringList(title, items) {
+      const section = document.createElement('div');
+      section.className = 'detail-section';
+      const heading = document.createElement('div');
+      heading.className = 'detail-section-title';
+      heading.textContent = title;
+      section.appendChild(heading);
+      if (items && items.length) {
+        const ul = document.createElement('ul');
+        ul.className = 'td-list';
+        items.forEach(x => {
+          const li = document.createElement('li');
+          li.textContent = x;
+          ul.appendChild(li);
+        });
+        section.appendChild(ul);
+      } else {
+        const p = document.createElement('p');
+        p.className = 'text-muted text-sm';
+        p.textContent = 'None defined.';
+        section.appendChild(p);
+      }
+      return section;
+    }
+    body.appendChild(renderStringList('Expected Grades', data.expectedGrades));
+    body.appendChild(renderStringList('Expected CTQs', data.expectedCTQs));
+
+    editBtn.addEventListener('click', () => openTestDataForm(convNo));
+    deleteBtn.addEventListener('click', () => {
+      openConfirmModal('Delete Conversation', 'Delete "' + data.application + '" and its ground truth entries? A backup is kept, but this removes it from active testing.', async () => {
+        await api('/api/testdata/conversations/' + convNo, { method: 'DELETE' });
+        showToast('Conversation deleted', 'success');
+        closeDetailPanel();
+        loadTestDataList();
+      });
+    });
+
+    panel.classList.add('open');
+    el('detail-overlay').classList.add('open');
+  }
+
+  function openTestDataForm(existingConvNo) {
+    const isEdit = existingConvNo != null;
+
+    function build(data) {
+      const panel = el('detail-panel');
+      const body = el('detail-panel-body');
+      el('detail-panel-title').textContent = isEdit ? 'Edit Conversation #' + existingConvNo : 'Add Conversation';
+      body.innerHTML = '';
+
+      if (isEdit) {
+        const warning = document.createElement('p');
+        warning.className = 'text-muted text-sm mb-4';
+        warning.style.color = 'var(--danger)';
+        warning.textContent = 'Editing changes what future test runs are graded against. Past results for this conversation are unaffected.';
+        body.appendChild(warning);
+      }
+
+      const basicsSection = document.createElement('div');
+      basicsSection.className = 'detail-section';
+      basicsSection.innerHTML =
+        '<div class="form-group mb-4"><label class="form-label" style="display:block;margin-bottom:6px;">Application</label>' +
+        '<input type="text" id="td-form-application" class="form-input" style="width:100%;" placeholder="e.g. Battery Cover"></div>' +
+        '<div class="form-group mb-4"><label class="form-label" style="display:block;margin-bottom:6px;">Industry</label>' +
+        '<input type="text" id="td-form-industry" class="form-input" style="width:100%;" placeholder="e.g. Electrical &amp; Electronics"></div>';
+      body.appendChild(basicsSection);
+
+      if (!isEdit) {
+        const uploadSection = document.createElement('div');
+        uploadSection.className = 'detail-section';
+        uploadSection.innerHTML =
+          '<div class="detail-section-title">Import Conversation</div>' +
+          '<p class="text-muted text-sm mb-2">Upload a conversation JSON (same structure as files in <code>conversation/</code>) or a PDF chat export to fill in the turns below instead of adding them one by one.</p>' +
+          '<div class="td-upload-row">' +
+          '<label class="btn btn-secondary btn-sm td-upload-btn">' + ICON_UPLOAD + '<span>Upload JSON / PDF</span>' +
+          '<input type="file" id="td-form-upload" accept=".json,.pdf" style="display:none;"></label>' +
+          '<span id="td-upload-status" class="text-muted text-sm"></span>' +
+          '</div>';
+        body.appendChild(uploadSection);
+      }
+
+      const turnsSection = document.createElement('div');
+      turnsSection.className = 'detail-section';
+      turnsSection.innerHTML =
+        '<div class="detail-section-title" style="display:flex;justify-content:space-between;align-items:center;">' +
+        '<span>Conversation Turns</span><button type="button" id="td-form-add-turn" class="btn btn-xs btn-secondary">+ Add Turn</button></div>' +
+        '<div id="td-form-turns"></div>';
+      body.appendChild(turnsSection);
+
+      const gradesSection = document.createElement('div');
+      gradesSection.className = 'detail-section';
+      gradesSection.innerHTML =
+        '<label class="form-label" style="display:block;margin-bottom:6px;">Expected Grades (one per line)</label>' +
+        '<textarea id="td-form-grades" class="form-input td-textarea" placeholder="Zytel 70G35EF"></textarea>';
+      body.appendChild(gradesSection);
+
+      const ctqSection = document.createElement('div');
+      ctqSection.className = 'detail-section';
+      ctqSection.innerHTML =
+        '<label class="form-label" style="display:block;margin-bottom:6px;">Expected CTQs (one per line)</label>' +
+        '<textarea id="td-form-ctqs" class="form-input td-textarea" placeholder="High impact resistance"></textarea>';
+      body.appendChild(ctqSection);
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'btn btn-primary';
+      saveBtn.textContent = isEdit ? 'Save Changes' : 'Create Conversation';
+      body.appendChild(saveBtn);
+
+      el('td-form-application').value = data.application || '';
+      el('td-form-industry').value = data.industry || '';
+      el('td-form-grades').value = (data.expectedGrades || []).join('\n');
+      el('td-form-ctqs').value = (data.expectedCTQs || []).join('\n');
+
+      const turnsContainer = el('td-form-turns');
+      function addTurnRow(role, content) {
+        const row = document.createElement('div');
+        row.className = 'td-turn-row';
+        row.innerHTML =
+          '<select class="td-turn-role form-input"><option value="assistant">Agent</option><option value="user">User</option></select>' +
+          '<textarea class="td-turn-content" placeholder="Message content"></textarea>' +
+          '<button type="button" class="td-turn-remove btn btn-xs btn-danger">Remove</button>';
+        row.querySelector('.td-turn-role').value = role || 'assistant';
+        row.querySelector('.td-turn-content').value = content || '';
+        row.querySelector('.td-turn-remove').addEventListener('click', () => row.remove());
+        turnsContainer.appendChild(row);
+      }
+      const initialTurns = (data.turns && data.turns.length) ? data.turns : [{ role: 'assistant', content: '' }, { role: 'user', content: '' }];
+      initialTurns.forEach(t => addTurnRow(t.role, t.content));
+
+      el('td-form-add-turn').addEventListener('click', () => {
+        const rows = turnsContainer.querySelectorAll('.td-turn-row');
+        const lastRole = rows.length ? rows[rows.length - 1].querySelector('.td-turn-role').value : 'user';
+        addTurnRow(lastRole === 'user' ? 'assistant' : 'user', '');
+      });
+
+      const uploadInput = el('td-form-upload');
+      if (uploadInput) {
+        uploadInput.addEventListener('change', async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          const statusEl = el('td-upload-status');
+          statusEl.textContent = 'Parsing ' + file.name + '…';
+          const formData = new FormData();
+          formData.append('file', file);
+          try {
+            const parsed = await api('/api/testdata/parse-upload', { method: 'POST', body: formData });
+            if (!el('td-form-application').value.trim() && parsed.application) {
+              el('td-form-application').value = parsed.application;
+            }
+            if (!el('td-form-industry').value.trim() && parsed.industry) {
+              el('td-form-industry').value = parsed.industry;
+            }
+            turnsContainer.innerHTML = '';
+            (parsed.turns || []).forEach(t => addTurnRow(t.role, t.content));
+            statusEl.textContent = 'Loaded ' + (parsed.turns || []).length + ' turns from ' + file.name;
+            showToast('Parsed ' + (parsed.turns || []).length + ' turns from file', 'success');
+          } catch {
+            statusEl.textContent = '';
+          } finally {
+            e.target.value = '';
+          }
+        });
+      }
+
+      saveBtn.addEventListener('click', async () => {
+        const turns = Array.from(turnsContainer.querySelectorAll('.td-turn-row')).map(row => ({
+          role: row.querySelector('.td-turn-role').value,
+          content: row.querySelector('.td-turn-content').value.trim(),
+        })).filter(t => t.content);
+
+        const payload = {
+          application: el('td-form-application').value.trim(),
+          industry: el('td-form-industry').value.trim(),
+          turns: turns,
+          expectedGrades: el('td-form-grades').value.split('\n').map(s => s.trim()).filter(Boolean),
+          expectedCTQs: el('td-form-ctqs').value.split('\n').map(s => s.trim()).filter(Boolean),
+        };
+
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
+        try {
+          if (isEdit) {
+            await api('/api/testdata/conversations/' + existingConvNo, {
+              method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+            });
+            showToast('Conversation updated', 'success');
+          } else {
+            await api('/api/testdata/conversations', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+            });
+            showToast('Conversation created', 'success');
+          }
+          closeDetailPanel();
+          loadTestDataList();
+        } catch {
+          saveBtn.disabled = false;
+          saveBtn.textContent = isEdit ? 'Save Changes' : 'Create Conversation';
+        }
+      });
+
+      panel.classList.add('open');
+      el('detail-overlay').classList.add('open');
+    }
+
+    if (isEdit) {
+      api('/api/testdata/conversations/' + existingConvNo).then(build).catch(() => { });
+    } else {
+      build({});
+    }
+  }
+
+  function initTestData() {
+    on('testdata-add-btn', 'click', () => openTestDataForm(null));
   }
 
   /* ----------------------------------------------------------
@@ -1721,11 +2561,7 @@
         if (data.snapshot && data.snapshot.mode === 'batch') {
           resumeBatchRun(data.snapshot);
         } else if (data.snapshot && data.snapshot.mode === 'single') {
-          // If single run, just show the spinner. 
-          // Rebuilding single-log is not implemented yet.
-          const stopBtn = el('single-stop-btn');
-          if (stopBtn) show(stopBtn);
-          // connectSSE({}) ... can be omitted for single runs as UI isn't fully robust.
+          resumeSingleRun(data.snapshot);
         } else {
           // Fallback if no snapshot
           const batchBtn = el('batch-run-btn');
@@ -1765,6 +2601,13 @@
   /* ----------------------------------------------------------
      Init
   ---------------------------------------------------------- */
+  function initCopyChips() {
+    document.addEventListener('click', (e) => {
+      const chip = e.target.closest('.conv-id-chip');
+      if (chip) copyToClipboard(chip.dataset.copy || chip.textContent);
+    });
+  }
+
   function init() {
     initNav();
     initSingleRun();
@@ -1776,6 +2619,9 @@
     initModal();
     initDetailPanel();
     initSidebarToggle();
+    initCopyChips();
+    initEnvHealthCheck();
+    initTestData();
     loadConfig();
     checkRunningState();
   }

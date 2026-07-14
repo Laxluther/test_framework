@@ -2,6 +2,11 @@ import json
 import re
 from agents import Runner
 
+def _run_tokens(result) -> int:
+    """Total tokens (input+output) an agents-SDK Runner.run() call consumed."""
+    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
+    return usage.total_tokens if usage else 0
+
 # --- Grade Evaluation ---
 
 def extract_grade_name(grade) -> str:
@@ -66,8 +71,10 @@ async def evaluate_grades_llm(evaluator_agent, suggested_grades: list, expected_
         + "\n\nEvaluate and respond with JSON only."
     )
 
+    tokens = 0
     try:
         result = await Runner.run(evaluator_agent, input=prompt)
+        tokens = _run_tokens(result)
         raw = result.final_output.strip()
         raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
         raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE)
@@ -84,11 +91,13 @@ async def evaluate_grades_llm(evaluator_agent, suggested_grades: list, expected_
             "totalMatched": len(matched_exp),
             "method": "llm",
             "reasoning": parsed.get("reasoning", ""),
+            "tokens": tokens,
         }
     except Exception as e:
         fallback = evaluate_grades_string_match(suggested_grades, expected_grades)
         fallback["method"] = "llm_fallback_string_match"
         fallback["reasoning"] = f"LLM evaluation failed ({e}), used string match"
+        fallback["tokens"] = tokens
         return fallback
 
 async def evaluate_grades(evaluator_agent, suggested_grades: list, expected_grades: list, use_llm: bool = True) -> dict:
@@ -180,14 +189,17 @@ async def evaluate_assumptions_llm(evaluator_agent, application: str, assumption
         f"ASSUMPTION_TEXT:\n{assumption_text}\n"
     )
     
+    tokens = 0
     try:
         result = await Runner.run(evaluator_agent, input=prompt)
+        tokens = _run_tokens(result)
         raw = result.final_output.strip()
         raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
         raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE)
         parsed = json.loads(raw)
         parsed["method"] = "llm"
-        
+        parsed["tokens"] = tokens
+
         matched = parsed.get("matchedCTQs", [])
         expected_len = len(expected_ctqs)
         if "overallScore" not in parsed:
@@ -195,12 +207,13 @@ async def evaluate_assumptions_llm(evaluator_agent, application: str, assumption
             parsed["overallScore"] = round(score, 1)
         if "passed" not in parsed:
             parsed["passed"] = parsed["overallScore"] >= 5.0
-            
+
         return parsed
     except Exception as e:
         fallback = evaluate_assumptions_keyword_match(assumption_text, expected_ctqs)
         fallback["method"] = "llm_fallback_keyword"
         fallback["reasoning"] = f"LLM evaluation failed ({e}), used keyword match"
+        fallback["tokens"] = tokens
         return fallback
 
 async def evaluate_assumptions(evaluator_agent, application: str, assumption_text: str, expected_ctqs: list[str], use_llm: bool = True) -> dict:

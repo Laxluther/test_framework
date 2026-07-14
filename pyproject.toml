@@ -5,17 +5,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "agent-framework-core[all]==1.0.0",
     "aiohttp>=3.13.3",
-    "elasticsearch==8.19.1",
-    "langchain-openai>=1.1.11",
-    "litellm>=1.83.0",
-    "mflow>=1.3.1",
-    "mlflow>=1.27.0",
+    "httpx>=0.28.1",
+    "mlflow>=3.1.0",
     "nest-asyncio>=1.6.0",
     "openai-agents>=0.11.1",
     "openpyxl>=3.1.5",
-    "pandas>=3.0.1",
+    "pandas>=2.2,<3",
     "pdfplumber>=0.11.9",
     "pypdf>=6.9.2",
     "python-dotenv>=1.2.2",

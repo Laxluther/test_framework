@@ -59,6 +59,12 @@
         <span class="nav-text">Comparison</span>
       </button>
       
+      <div class="nav-section-title">TEST DATA</div>
+      <button class="nav-item" data-page="testdata" title="Test Data">
+        <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></span>
+        <span class="nav-text">Test Data</span>
+      </button>
+
       <div class="nav-section-title">SYSTEM & TRACING</div>
       <button class="nav-item" data-page="history" title="History">
         <span class="nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></span> 
@@ -125,11 +131,15 @@
       
       <div class="execution-area">
         <div class="log-container card">
-          <div class="card-header"><span class="card-title">Live Output</span></div>
+          <div class="card-header">
+            <span class="card-title">Live Conversation</span>
+            <div class="run-status-rail" id="single-status-rail"></div>
+          </div>
           <div id="single-log" class="log-body"></div>
         </div>
-        
+
         <div id="single-result-card" class="result-card card">
+          <div class="result-card-placeholder text-muted text-sm">Run a test to see the result summary here.</div>
           <div class="result-card-header">
             <!-- Badge and Title inserted via JS -->
           </div>
@@ -152,8 +162,15 @@
           <div class="form-group flex-1">
             <label class="form-label">Total Rounds</label>
             <div style="display: flex; align-items: center; gap: 12px; height: 32px;">
-              <input type="range" id="batch-rounds" class="form-range" min="1" max="50" value="1" oninput="document.getElementById('batch-rounds-val').innerText = this.value" style="flex: 1;">
+              <input type="range" id="batch-rounds" class="form-range" min="1" max="50" value="1" style="flex: 1;">
               <span id="batch-rounds-val" style="width: 24px; font-weight: 500;">1</span>
+            </div>
+          </div>
+          <div class="form-group flex-1">
+            <label class="form-label" title="Sequential runs conversations one at a time; Parallel runs several at once (faster, but harder on rate limits) so you can compare both.">Execution Mode</label>
+            <div class="segmented-control" id="batch-execution-mode" data-value="sequential">
+              <button type="button" class="segment active" data-mode="sequential">Sequential</button>
+              <button type="button" class="segment" data-mode="parallel">Parallel</button>
             </div>
           </div>
           <div class="form-group flex-2 flex-row">
@@ -161,6 +178,7 @@
             <button id="batch-stop-btn" class="btn btn-danger flex-1 hidden" style="margin-left: 8px;">Stop Run</button>
           </div>
         </div>
+        <div id="batch-rounds-warning" class="text-muted text-sm mt-4"></div>
       </div>
       
       <div id="batch-progress-area" class="progress-area hidden">
@@ -204,6 +222,7 @@
                 <th>Rounds</th>
                 <th>Grade Accuracy</th>
                 <th>Avg Assumption</th>
+                <th>Notes</th>
               </tr>
             </thead>
             <tbody id="results-batch-tbody">
@@ -235,7 +254,53 @@
     <!-- PAGE: DASHBOARD -->
     <section id="page-dashboard" class="page-section">
 
-      
+      <!-- Always-on overview: no session selection required -->
+      <div class="dashboard-stats-grid mb-4">
+        <div class="stat-card">
+          <div class="stat-card-label">Total Runs</div>
+          <div id="ov-stat-total-runs" class="stat-card-value">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">Latest Pass Rate</div>
+          <div id="ov-stat-latest-pass" class="stat-card-value">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">Avg Assumption Score</div>
+          <div id="ov-stat-assumption" class="stat-card-value">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">Avg Response Time</div>
+          <div id="ov-stat-latency" class="stat-card-value">—</div>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header"><span class="card-title">Pass Rate Trend (Recent Runs)</span></div>
+        <div class="card-body">
+          <div id="ov-trend-chart" class="bar-chart"></div>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header"><span class="card-title">Recent Runs</span></div>
+        <div class="table-wrapper" style="border:none;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Session ID</th>
+                <th>Date / Time</th>
+                <th>Environment</th>
+                <th>Grade Accuracy</th>
+                <th>Avg Assumption</th>
+                <th>Avg Response Time</th>
+              </tr>
+            </thead>
+            <tbody id="ov-recent-runs-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section-title mb-2">Session Deep-Dive</div>
       <div class="card mb-4" style="padding: 16px;">
         <div class="form-row">
           <div class="form-group" style="width: 300px;">
@@ -249,7 +314,7 @@
           </div>
         </div>
       </div>
-      
+
       <div id="dashboard-content" class="hidden">
         <div class="dashboard-stats-grid mb-4">
           <div class="stat-card">
@@ -265,11 +330,41 @@
             <div id="dash-stat-score" class="stat-card-value">—</div>
           </div>
         </div>
-        
+
+        <div class="card mb-4 rounds-filter-card">
+          <div class="rounds-filter-row">
+            <span class="form-label">Rounds included</span>
+            <div class="rounds-stepper">
+              <button id="dash-rounds-minus" class="btn btn-secondary btn-xs" title="Show fewer rounds">−</button>
+              <span id="dash-rounds-display" class="rounds-stepper-value">round 1 – 1 of 1</span>
+              <button id="dash-rounds-plus" class="btn btn-secondary btn-xs" title="Show more rounds">+</button>
+            </div>
+          </div>
+        </div>
+
         <div class="card mb-4">
           <div class="card-header">Result Heatmap</div>
           <div class="card-body overflow-auto">
             <div id="dashboard-heatmap"></div>
+          </div>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-header" style="display:flex; align-items:center; gap:10px;">
+            <span class="card-title">Flakiness</span>
+            <span class="text-muted text-sm">Conversations that pass some rounds and fail others</span>
+          </div>
+          <div class="card-body">
+            <div id="dashboard-flakiness"></div>
+          </div>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-header">
+            <span class="card-title">Failure Breakdown</span>
+          </div>
+          <div class="card-body">
+            <div id="dashboard-failure-clusters" class="bar-chart"></div>
           </div>
         </div>
 
@@ -281,11 +376,11 @@
         </div>
       </div>
     </section>
-    
+
     <!-- PAGE: COMPARISON -->
     <section id="page-comparison" class="page-section">
 
-      
+
       <div class="card mb-4" style="padding: 16px;">
         <div class="form-row">
           <div class="form-group flex-1">
@@ -316,8 +411,8 @@
             <thead>
               <tr>
                 <th>Application</th>
-                <th>Base Grade</th>
-                <th>New Grade</th>
+                <th>Base Pass Rate</th>
+                <th>New Pass Rate</th>
                 <th>Base Score</th>
                 <th>New Score</th>
                 <th>Delta</th>
@@ -344,7 +439,9 @@
             <tr>
               <th>Session ID</th>
               <th>Date / Time</th>
-              <th>Type</th>
+              <th>Environment</th>
+              <th>Rounds</th>
+              <th>Conversations</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -379,6 +476,33 @@
         <div id="trace-spans-list" class="trace-list">
           <!-- Injected via JS -->
         </div>
+      </div>
+    </section>
+
+    <!-- PAGE: TEST DATA -->
+    <section id="page-testdata" class="page-section">
+      <div class="flex justify-between items-center mb-4">
+        <div class="text-muted text-sm">Test conversations and their ground truth (expected grades &amp; CTQs).</div>
+        <button id="testdata-add-btn" class="btn btn-primary btn-sm">Add Conversation</button>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>No.</th>
+              <th>Application</th>
+              <th>Industry</th>
+              <th>Turns</th>
+              <th>Grades</th>
+              <th>CTQs</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="testdata-tbody">
+            <!-- Injected via JS -->
+          </tbody>
+        </table>
       </div>
     </section>
 

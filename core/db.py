@@ -51,9 +51,55 @@ def init_db():
             cursor.execute(f'ALTER TABLE test_results ADD COLUMN {col_name} TEXT')
         except sqlite3.OperationalError:
             pass  # Column already exists
-    
+
+    for col_name in ['total_duration_ms', 'avg_turn_latency_ms', 'grade_eval_ms', 'assumption_eval_ms']:
+        try:
+            cursor.execute(f'ALTER TABLE test_results ADD COLUMN {col_name} REAL')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    for col_name in ['simulator_tokens', 'grade_eval_tokens', 'assumption_eval_tokens', 'total_tokens']:
+        try:
+            cursor.execute(f'ALTER TABLE test_results ADD COLUMN {col_name} INTEGER')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    try:
+        cursor.execute('ALTER TABLE batch_runs ADD COLUMN avg_latency_ms REAL')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    try:
+        cursor.execute('ALTER TABLE batch_runs ADD COLUMN notes TEXT')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     conn.commit()
     conn.close()
+
+def update_batch_run_notes(batch_id: int, notes: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('UPDATE batch_runs SET notes = ? WHERE id = ?', (notes, batch_id))
+    conn.commit()
+    conn.close()
+
+def get_failed_conversation_nos(batch_id: int) -> List[int]:
+    """Conversation numbers that did not pass in every round of this session
+    (partial or total failure), for a 'retry failed' re-run."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT conversation_no,
+               SUM(CASE WHEN grades_passed = 1 THEN 1 ELSE 0 END) as passed,
+               COUNT(*) as total
+        FROM test_results
+        WHERE batch_id = ?
+        GROUP BY conversation_no
+    ''', (batch_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [r[0] for r in rows if r[1] < r[2]]
 
 def create_batch_run(das_env: str, total_iterations: int) -> int:
     conn = sqlite3.connect(DB_PATH)
@@ -72,34 +118,34 @@ def update_batch_run_metrics(batch_id: int):
     cursor = conn.cursor()
     
     cursor.execute('''
-        SELECT grades_passed, assumptions_score 
-        FROM test_results 
+        SELECT grades_passed, assumptions_score, avg_turn_latency_ms
+        FROM test_results
         WHERE batch_id = ?
     ''', (batch_id,))
-    
+
     results = cursor.fetchall()
-    
+
     if not results:
         conn.close()
         return
-        
-    total_tests = len(results)
-    passed_grades_count = sum(1 for r in results if r[0] == 1)
-    
-    grade_accuracy_avg = (passed_grades_count / total_tests) * 100 if total_tests > 0 else 0.0
-    
+
+    graded_results = [r for r in results if r[0] is not None]
+    passed_grades_count = sum(1 for r in graded_results if r[0] == 1)
+
+    grade_accuracy_avg = (passed_grades_count / len(graded_results)) * 100 if graded_results else None
+
     valid_assumption_scores = [r[1] for r in results if r[1] is not None]
-    if valid_assumption_scores:
-        assumption_score_avg = sum(valid_assumption_scores) / len(valid_assumption_scores)
-    else:
-        assumption_score_avg = 0.0
-        
+    assumption_score_avg = (sum(valid_assumption_scores) / len(valid_assumption_scores)) if valid_assumption_scores else None
+
+    valid_latencies = [r[2] for r in results if r[2] is not None]
+    avg_latency_ms = sum(valid_latencies) / len(valid_latencies) if valid_latencies else None
+
     cursor.execute('''
         UPDATE batch_runs
-        SET grade_accuracy_avg = ?, assumption_score_avg = ?
+        SET grade_accuracy_avg = ?, assumption_score_avg = ?, avg_latency_ms = ?
         WHERE id = ?
-    ''', (grade_accuracy_avg, assumption_score_avg, batch_id))
-    
+    ''', (grade_accuracy_avg, assumption_score_avg, avg_latency_ms, batch_id))
+
     conn.commit()
     conn.close()
 
@@ -122,23 +168,33 @@ def insert_test_result(
     agent_assumptions: str = "",
     actual_turns_json: str = None,
     grade_eval_details: str = None,
-    assumption_eval_details: str = None
+    assumption_eval_details: str = None,
+    total_duration_ms: Optional[float] = None,
+    avg_turn_latency_ms: Optional[float] = None,
+    grade_eval_ms: Optional[float] = None,
+    assumption_eval_ms: Optional[float] = None,
+    simulator_tokens: Optional[int] = None,
+    grade_eval_tokens: Optional[int] = None,
+    assumption_eval_tokens: Optional[int] = None,
+    total_tokens: Optional[int] = None
 ) -> int:
     if expected_assumptions is None:
         expected_assumptions = []
-        
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
+
     cursor.execute('''
         INSERT INTO test_results (
-            batch_id, das_env, round_no, conversation_id, conversation_no, 
-            application_name, expected_grades, suggested_grades, 
-            grades_matched_count, grades_passed, assumptions_score, 
+            batch_id, das_env, round_no, conversation_id, conversation_no,
+            application_name, expected_grades, suggested_grades,
+            grades_matched_count, grades_passed, assumptions_score,
             assumptions_passed, flow_completed, error_message,
             expected_assumptions, agent_assumptions,
-            actual_turns_json, grade_eval_details, assumption_eval_details
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            actual_turns_json, grade_eval_details, assumption_eval_details,
+            total_duration_ms, avg_turn_latency_ms, grade_eval_ms, assumption_eval_ms,
+            simulator_tokens, grade_eval_tokens, assumption_eval_tokens, total_tokens
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         batch_id,
         das_env,
@@ -158,9 +214,17 @@ def insert_test_result(
         agent_assumptions,
         actual_turns_json,
         grade_eval_details,
-        assumption_eval_details
+        assumption_eval_details,
+        total_duration_ms,
+        avg_turn_latency_ms,
+        grade_eval_ms,
+        assumption_eval_ms,
+        simulator_tokens,
+        grade_eval_tokens,
+        assumption_eval_tokens,
+        total_tokens
     ))
-    
+
     row_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -172,13 +236,15 @@ def get_past_runs() -> List[Dict[str, Any]]:
     cursor = conn.cursor()
     
     cursor.execute('''
-        SELECT 
-            b.id, 
-            b.timestamp, 
-            b.das_env, 
-            b.total_iterations, 
-            b.grade_accuracy_avg, 
+        SELECT
+            b.id,
+            b.timestamp,
+            b.das_env,
+            b.total_iterations,
+            b.grade_accuracy_avg,
             b.assumption_score_avg,
+            b.avg_latency_ms,
+            b.notes,
             COUNT(DISTINCT t.conversation_no) as unique_convs,
             MAX(t.grades_passed) as single_grade_passed,
             MAX(t.flow_completed) as single_flow_completed,
@@ -214,6 +280,33 @@ def get_test_results_for_batch(batch_id: int) -> List[Dict[str, Any]]:
         
     conn.close()
     return results
+
+def get_results_by_round(batch_id: int) -> Dict[int, List[Dict[str, Any]]]:
+    """Reconstruct the result-dict shape core/reporter.py expects, from stored
+    DB columns, so a report can be regenerated even after its results/ folder
+    (round JSONs) has been cleaned up from disk."""
+    rows = get_test_results_for_batch(batch_id)
+    by_round: Dict[int, List[Dict[str, Any]]] = {}
+    for r in rows:
+        round_no = r.get("round_no") or 1
+        grade_eval = json.loads(r["grade_eval_details"]) if r.get("grade_eval_details") else {}
+        assumption_eval = json.loads(r["assumption_eval_details"]) if r.get("assumption_eval_details") else {}
+        result = {
+            "conversationNo": r.get("conversation_no"),
+            "application": r.get("application_name", ""),
+            "flowCompleted": bool(r.get("flow_completed")),
+            "error": r.get("error_message", ""),
+            "expectedGrades": r.get("expected_grades", []),
+            "suggestedGrades": r.get("suggested_grades", []),
+            "gradeEvaluation": grade_eval,
+            "assumptionEvaluation": assumption_eval,
+            "agentAssumptionOutput": r.get("agent_assumptions", ""),
+        }
+        by_round.setdefault(round_no, []).append(result)
+
+    for round_no in by_round:
+        by_round[round_no].sort(key=lambda x: x.get("conversationNo") or 999)
+    return by_round
 
 def update_test_result_override(test_id: int, new_grades_passed: Optional[bool], new_assumptions_score: Optional[float]):
     """Update a specific test result manually, and trigger a batch metrics recalculation."""

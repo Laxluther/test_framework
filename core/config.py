@@ -8,6 +8,7 @@ load_dotenv(override=False)
 MAX_TURNS = 20
 DEFAULT_EMAIL = "Tester.Agent@celanese.com"
 DEFAULT_INDUSTRY = "Electrical & Electronics"
+MAX_PARALLEL_CONVERSATIONS = int(os.getenv("MAX_PARALLEL_CONVERSATIONS", "4"))
 
 # File paths
 DEFAULT_GRADES_FILE = "./groundTruth/expectedGrades.json"
@@ -32,11 +33,6 @@ DAS_API_KEYS = {
     "UAT": os.getenv("DAS_API_KEY_UAT", ""),
     "Prod": os.getenv("DAS_API_KEY_PROD", ""),
 }
-
-import os
-from dotenv import load_dotenv
-
-load_dotenv(override=False)
 
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT") or os.getenv("azure_openai_endpoint", "")
 AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY") or os.getenv("azure_openai_key", "")
