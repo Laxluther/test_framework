@@ -1042,6 +1042,7 @@
       retryBtn.title = 'Re-run only the conversations that did not pass in every round, as a new linked session';
       const retryIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="10 8 16 12 10 16 10 8"/><circle cx="12" cy="12" r="10"/></svg>';
       retryBtn.innerHTML = retryIcon + ' Retry Failed';
+      retryBtn.style.display = 'none'; // hidden per request; keep wired up for later re-enable
       retryBtn.addEventListener('click', async () => {
         if (state.isRunning) { showToast('A test is already running', 'error'); return; }
         retryBtn.disabled = true;
