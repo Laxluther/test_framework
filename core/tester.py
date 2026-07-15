@@ -8,7 +8,12 @@ from agents import Runner
 from .config import MAX_TURNS, DEFAULT_EMAIL, DEFAULT_INDUSTRY
 from .das_client import das_send, das_end
 from .evaluator import evaluate_grades, evaluate_assumptions
+from .mlflow_client import summarize_turn_traces, build_turn_traces
 from core.loader import extract_app_name
+
+# MLflow trace fetch/summarize is a network round-trip against a third-party tracking
+# server; cap it so a slow/hanging MLflow instance can never stall a test run.
+TURN_TRACE_FETCH_TIMEOUT_S = 25.0
 
 def extract_requirements(reference: dict) -> list[str]:
     return [t["content"] for t in reference.get("turns", []) if t["role"] == "user"]
@@ -52,7 +57,8 @@ async def run_test(
     api_url: str,
     api_key: str,
     use_llm_eval: bool = True,
-    on_progress = None
+    on_progress = None,
+    das_env: str = "Local",
 ) -> dict:
     filename = reference.get("filename", f"Conversation_{conv_no}.json")
     app_name = reference.get("application", extract_app_name(filename))
@@ -173,6 +179,22 @@ async def run_test(
         "totalTokens": simulator_tokens_total + grade_eval_tokens + assumption_eval_tokens,
     }
 
+    # Enrich each turn with which agents/tools MLflow recorded for it and how long
+    # each took. Best-effort: an unconfigured/unreachable MLflow, or a timeout, just
+    # means agentCalls stays empty — the turn's own responseTimeMs (measured locally
+    # above, independent of MLflow) is unaffected either way.
+    assistant_turn_count = sum(1 for t in actual_turns if t["role"] == "assistant")
+    mlflow_turns = []
+    if assistant_turn_count:
+        try:
+            mlflow_turns = await asyncio.wait_for(
+                asyncio.to_thread(summarize_turn_traces, conversation_id, das_env, assistant_turn_count),
+                timeout=TURN_TRACE_FETCH_TIMEOUT_S
+            )
+        except Exception:
+            mlflow_turns = []
+    turn_traces = build_turn_traces(actual_turns, mlflow_turns)
+
     if on_progress:
         on_progress("completed", {
             "conv_no": conv_no,
@@ -206,6 +228,7 @@ async def run_test(
         "agentAssumptionOutput": assumption_text,
         "assumptionEvaluation": assumption_eval,
         "actualTurns": actual_turns,
+        "turnTraces": turn_traces,
         "referenceTurns": reference.get("turns", []),
         "timing": timing,
         "usage": usage,

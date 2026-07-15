@@ -14,8 +14,9 @@ from core.das_client import check_api_health
 from core.db import (get_past_runs, get_test_results_for_batch, get_single_result_detail,
                      update_test_result_override, delete_batch_run, delete_test_result,
                      get_comparison_data, get_results_by_round, update_batch_run_notes,
-                     get_failed_conversation_nos)
-from core.mlflow_client import get_traces_for_conversation
+                     get_failed_conversation_nos, update_test_result_turn_traces,
+                     get_test_result_by_conversation_id)
+from core.mlflow_client import get_traces_for_conversation, summarize_turn_traces, build_turn_traces
 from core.loader import collect_test_files, extract_conversation_no, load_conversation_json, extract_app_name
 from core.reporter import generate_report_from_results_by_round
 from core.testdata import (list_conversations_with_coverage, get_conversation_detail,
@@ -75,7 +76,8 @@ def api_health():
     api_url = DAS_ENVIRONMENTS.get(env, "")
     if not api_url:
         return jsonify({"env": env, "healthy": False, "reason": "No URL configured for this environment"})
-    healthy = asyncio.run(check_api_health(api_url))
+    api_key = DAS_API_KEYS.get(env, "")
+    healthy = asyncio.run(check_api_health(api_url, api_key))
     return jsonify({"env": env, "healthy": healthy})
 
 def progress_callback(event_type, data):
@@ -339,6 +341,30 @@ def api_mlflow_traces(conversation_id):
     env = request.args.get("env", "Local")
     traces = get_traces_for_conversation(conversation_id, env)
     return jsonify(traces)
+
+@app.route("/api/mlflow/backfill/<conversation_id>", methods=["POST"])
+def api_mlflow_backfill(conversation_id):
+    """Fetch MLflow's per-turn agent/tool breakdown for an already-completed run (old
+    runs predate turn_traces_json; a live run's fetch may also have failed/timed out)
+    and save it to that result row, so it shows up in the Traces tab and in a
+    regenerated report's timing_round{N} sheet."""
+    result = get_test_result_by_conversation_id(conversation_id)
+    if not result:
+        return jsonify({"error": "No stored result found for this conversation ID"}), 404
+
+    env = request.args.get("env") or result.get("das_env") or "Local"
+    actual_turns = result.get("actual_turns_json") or []
+    assistant_turn_count = sum(1 for t in actual_turns if t.get("role") == "assistant")
+    if not assistant_turn_count:
+        return jsonify({"error": "This result has no stored conversation turns to match traces against"}), 400
+
+    mlflow_turns = summarize_turn_traces(conversation_id, env, assistant_turn_count)
+    if not mlflow_turns:
+        return jsonify({"error": f"No MLflow traces found for this conversation in '{env}'"}), 404
+
+    turn_traces = build_turn_traces(actual_turns, mlflow_turns)
+    update_test_result_turn_traces(result["id"], turn_traces)
+    return jsonify({"status": "updated", "resultId": result["id"], "turnTraces": turn_traces})
 
 @app.route("/api/report/<int:session_id>")
 def api_download_report(session_id):

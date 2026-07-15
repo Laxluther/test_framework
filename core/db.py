@@ -46,7 +46,7 @@ def init_db():
     ''')
     
     # Schema migration: add new columns if they don't exist
-    for col_name in ['actual_turns_json', 'grade_eval_details', 'assumption_eval_details']:
+    for col_name in ['actual_turns_json', 'grade_eval_details', 'assumption_eval_details', 'turn_traces_json']:
         try:
             cursor.execute(f'ALTER TABLE test_results ADD COLUMN {col_name} TEXT')
         except sqlite3.OperationalError:
@@ -169,6 +169,7 @@ def insert_test_result(
     actual_turns_json: str = None,
     grade_eval_details: str = None,
     assumption_eval_details: str = None,
+    turn_traces_json: str = None,
     total_duration_ms: Optional[float] = None,
     avg_turn_latency_ms: Optional[float] = None,
     grade_eval_ms: Optional[float] = None,
@@ -191,10 +192,10 @@ def insert_test_result(
             grades_matched_count, grades_passed, assumptions_score,
             assumptions_passed, flow_completed, error_message,
             expected_assumptions, agent_assumptions,
-            actual_turns_json, grade_eval_details, assumption_eval_details,
+            actual_turns_json, grade_eval_details, assumption_eval_details, turn_traces_json,
             total_duration_ms, avg_turn_latency_ms, grade_eval_ms, assumption_eval_ms,
             simulator_tokens, grade_eval_tokens, assumption_eval_tokens, total_tokens
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         batch_id,
         das_env,
@@ -215,6 +216,7 @@ def insert_test_result(
         actual_turns_json,
         grade_eval_details,
         assumption_eval_details,
+        turn_traces_json,
         total_duration_ms,
         avg_turn_latency_ms,
         grade_eval_ms,
@@ -291,6 +293,19 @@ def get_results_by_round(batch_id: int) -> Dict[int, List[Dict[str, Any]]]:
         round_no = r.get("round_no") or 1
         grade_eval = json.loads(r["grade_eval_details"]) if r.get("grade_eval_details") else {}
         assumption_eval = json.loads(r["assumption_eval_details"]) if r.get("assumption_eval_details") else {}
+
+        # grade_eval_details/assumption_eval_details are a frozen snapshot of the
+        # original automated evaluation; grades_passed/assumptions_score are the
+        # live columns a manual override (api/results/override) updates. Without
+        # this, a report regenerated after an override still showed the pre-override
+        # verdict because build_grades_sheet/_grade_status read the frozen snapshot.
+        db_grades_passed = r.get("grades_passed")
+        if db_grades_passed is not None and bool(db_grades_passed) != bool(grade_eval.get("passed")):
+            grade_eval = dict(grade_eval, passed=bool(db_grades_passed), reasoning=((grade_eval.get("reasoning") or "") + " [Manually overridden]").strip())
+        db_assumptions_score = r.get("assumptions_score")
+        if db_assumptions_score is not None and db_assumptions_score != assumption_eval.get("overallScore"):
+            assumption_eval = dict(assumption_eval, overallScore=db_assumptions_score, passed=db_assumptions_score >= 5.0, reasoning=((assumption_eval.get("reasoning") or "") + " [Manually overridden]").strip())
+
         result = {
             "conversationNo": r.get("conversation_no"),
             "application": r.get("application_name", ""),
@@ -301,6 +316,11 @@ def get_results_by_round(batch_id: int) -> Dict[int, List[Dict[str, Any]]]:
             "gradeEvaluation": grade_eval,
             "assumptionEvaluation": assumption_eval,
             "agentAssumptionOutput": r.get("agent_assumptions", ""),
+            "timing": {
+                "totalDurationMs": r.get("total_duration_ms"),
+                "avgTurnLatencyMs": r.get("avg_turn_latency_ms"),
+            },
+            "turnTraces": json.loads(r["turn_traces_json"]) if r.get("turn_traces_json") else [],
         }
         by_round.setdefault(round_no, []).append(result)
 
@@ -370,9 +390,37 @@ def get_single_result_detail(result_id):
     d = dict(row)
     for field in ['expected_grades', 'suggested_grades', 'expected_assumptions']:
         d[field] = json.loads(d[field]) if d[field] else []
-    for field in ['actual_turns_json', 'grade_eval_details', 'assumption_eval_details']:
+    for field in ['actual_turns_json', 'grade_eval_details', 'assumption_eval_details', 'turn_traces_json']:
         d[field] = json.loads(d[field]) if d.get(field) else None
     return d
+
+def get_test_result_by_conversation_id(conversation_id: str):
+    """Look up the stored result row for a conversation_id (unique per run_test() call —
+    one uuid4 per round/conversation), so the MLflow Traces tab and result drill-down can
+    both backfill turn_traces_json for older runs from just the ID visible in MLflow."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM test_results WHERE conversation_id = ? ORDER BY id DESC LIMIT 1', (conversation_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    d = dict(row)
+    for field in ['actual_turns_json', 'grade_eval_details', 'assumption_eval_details', 'turn_traces_json']:
+        d[field] = json.loads(d[field]) if d.get(field) else None
+    return d
+
+def update_test_result_turn_traces(test_id: int, turn_traces: list) -> bool:
+    """Backfill turn_traces_json for a result that predates this feature (or whose
+    live run's MLflow fetch failed/timed out), by conversation_id lookup against MLflow."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('UPDATE test_results SET turn_traces_json = ? WHERE id = ?', (json.dumps(turn_traces), test_id))
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
 
 def get_comparison_data(session_a, session_b):
     """Get results for two sessions for comparison."""

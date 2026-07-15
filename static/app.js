@@ -19,10 +19,11 @@
     batchTotalRounds: 0,
     batchCompleted: 0,
     batchTotal: 0,
-    roundSummaries: [],
     sessions: [],
     single: { startTs: null, endTs: null, turnCount: 0, flowState: 'idle' },
     singleTimerHandle: null,
+    singleQueue: [],
+    sessionDrilldownContext: null,
     dashboardAllResults: [],
     dashboardMaxRounds: 1,
     dashboardVisibleRounds: 1,
@@ -91,6 +92,33 @@
       (matched ? ICON_CHECK : ICON_X) + (matched ? 'Matched' : 'Unmatched') + '</span>';
   }
 
+  /* Break the assumption-evaluation object (matchedCTQs/unmatchedCTQs/extraCTQs)
+     into one card per CTQ with clear matched/unmatched status, instead of a single
+     generic reasoning blob. Shared by the result drilldown and the compare view. */
+  function renderCTQListHTML(evalData) {
+    if (!evalData) return '<p class="text-muted text-sm">No CTQ evaluation data.</p>';
+    const matched = evalData.matchedCTQs || [];
+    const unmatched = evalData.unmatchedCTQs || [];
+    const extra = evalData.extraCTQs || [];
+    if (matched.length === 0 && unmatched.length === 0 && extra.length === 0) {
+      return '<p class="text-muted text-sm">No CTQs evaluated for this conversation.</p>';
+    }
+    let html = '';
+    matched.forEach(c => {
+      html += '<div class="eval-item"><div class="eval-item-header"><span class="eval-item-title">' + escapeHtml(c.expected || '') + '</span>' + matchIndicatorHTML(true) + '</div>' +
+        '<div class="eval-item-body">' + escapeHtml(c.actualEvidence || c.matchNotes || '') + '</div></div>';
+    });
+    unmatched.forEach(c => {
+      html += '<div class="eval-item"><div class="eval-item-header"><span class="eval-item-title">' + escapeHtml(c.expected || '') + '</span>' + matchIndicatorHTML(false) + '</div>' +
+        '<div class="eval-item-body">' + escapeHtml(c.reason || '') + '</div></div>';
+    });
+    if (extra.length > 0) {
+      html += '<div class="detail-field-label mt-4 mb-2">Extra CTQs mentioned (not in expected list)</div>' +
+        '<ul class="td-list">' + extra.map(x => '<li>' + escapeHtml(String(x)) + '</li>').join('') + '</ul>';
+    }
+    return html;
+  }
+
   function pct(n) {
     if (n == null || isNaN(n)) return '—';
     return (Math.round(n * 100) / 100).toFixed(1) + '%';
@@ -101,7 +129,52 @@
     return (Math.round(n * 100) / 100).toString();
   }
 
+  function pctColoredHTML(n) {
+    if (n == null || isNaN(n)) return '<span class="text-muted">—</span>';
+    const val = Math.round(n * 100) / 100;
+    const cls = val >= 80 ? 'text-success' : val >= 60 ? 'text-warning' : 'text-danger';
+    return '<span class="' + cls + '">' + val.toFixed(1) + '%</span>';
+  }
+
+  function scoreColoredHTML(n) {
+    if (n == null || isNaN(n)) return '<span class="text-muted">—</span>';
+    const val = Math.round(n * 100) / 100;
+    const cls = val >= 7 ? 'text-success' : val >= 5 ? 'text-warning' : 'text-danger';
+    return '<span class="' + cls + '">' + val + '</span>';
+  }
+
+  /* Batch vs single-conversation session, consistent everywhere a session list
+     is shown (Results, History). unique_convs > 1 is the same test the dashboard
+     session picker and Home overview already use to define "batch". */
+  function sessionTypeBadgeHTML(s) {
+    const isBatch = (s.unique_convs || 0) > 1;
+    return '<span class="session-type-badge ' + (isBatch ? 'batch' : 'single') + '">' + (isBatch ? 'Batch' : 'Single') + '</span>';
+  }
+
   function el(id) { return document.getElementById(id); }
+
+  /* Re-trigger the panel body's fade-in — call after rebuilding detail-panel-body's
+     content (switching conversations, opening a compare view, etc.) so the swap reads
+     as a transition instead of an instant content pop. */
+  function fadePanelBody() {
+    const body = el('detail-panel-body');
+    if (!body) return;
+    body.classList.remove('panel-content-fade');
+    void body.offsetWidth;
+    body.classList.add('panel-content-fade');
+  }
+
+  /* Clickable <tr>s otherwise have no keyboard path — Tab never lands on them and
+     Enter/Space does nothing. Call right after setting className = 'clickable'. */
+  function enableRowKeyboardActivation(tr) {
+    tr.tabIndex = 0;
+    tr.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        tr.click();
+      }
+    });
+  }
 
   function on(id, event, handler) {
     const elem = el(id);
@@ -140,7 +213,10 @@
     t.className = 'toast' + (type ? ' ' + type : '');
     t.textContent = msg;
     container.appendChild(t);
-    setTimeout(() => { t.remove(); }, 4000);
+    setTimeout(() => {
+      t.classList.add('leaving');
+      t.addEventListener('animationend', () => t.remove(), { once: true });
+    }, 4000);
   }
 
   function nowTimestamp() {
@@ -323,18 +399,68 @@
      Single Run
   ---------------------------------------------------------- */
   function initSingleRun() {
-    on('single-run-btn', 'click', startSingleRun);
+    on('single-run-btn', 'click', () => startSingleRun());
+    on('single-queue-btn', 'click', addToSingleQueue);
     on('single-stop-btn', 'click', async () => {
-      try { 
+      try {
         const btn = el('single-stop-btn');
         if (btn) {
           btn.disabled = true;
           btn.innerHTML = '<span class="spinner"></span> Stopping...';
         }
-        await api('/api/run/stop', { method: 'POST' }); 
-        showToast('Stop requested', 'success'); 
+        state.singleQueue = [];
+        renderSingleQueue();
+        await api('/api/run/stop', { method: 'POST' });
+        showToast('Stop requested — queue cleared', 'success');
       } catch { }
     });
+    renderSingleQueue();
+  }
+
+  function addToSingleQueue() {
+    const conv = el('single-conversation').value;
+    const rounds = parseInt(el('single-rounds').value) || 1;
+    if (!conv) { showToast('Please select a conversation to queue', 'error'); return; }
+    state.singleQueue.push({ conversation: conv, rounds: rounds });
+    renderSingleQueue();
+    showToast('Queued ' + conv + ' (' + rounds + ' round' + (rounds > 1 ? 's' : '') + ')', 'success');
+  }
+
+  function renderSingleQueue() {
+    const list = el('single-queue-list');
+    if (!list) return;
+    if (state.singleQueue.length === 0) {
+      list.innerHTML = '<p class="text-muted text-sm">No queued runs. Pick a conversation and rounds above, then click "+ Queue" to line up the next run.</p>';
+      return;
+    }
+    list.innerHTML = '';
+    state.singleQueue.forEach((item, idx) => {
+      const row = document.createElement('div');
+      row.className = 'single-queue-row';
+      row.innerHTML =
+        '<span class="single-queue-position">' + (idx + 1) + '</span>' +
+        '<span class="single-queue-name">' + escapeHtml(item.conversation) + '</span>' +
+        '<span class="single-queue-rounds">' + item.rounds + ' round' + (item.rounds > 1 ? 's' : '') + '</span>' +
+        '<button type="button" class="btn btn-xs btn-danger single-queue-remove">Remove</button>';
+      row.querySelector('.single-queue-remove').addEventListener('click', () => {
+        state.singleQueue.splice(idx, 1);
+        renderSingleQueue();
+      });
+      list.appendChild(row);
+    });
+  }
+
+  function startNextQueuedRun(logArea) {
+    if (state.singleQueue.length === 0) return false;
+    const next = state.singleQueue.shift();
+    renderSingleQueue();
+    if (logArea) addSystemNote(logArea, 'Starting queued run: ' + next.conversation + ' (' + next.rounds + ' round' + (next.rounds > 1 ? 's' : '') + ')');
+    const convSel = el('single-conversation');
+    const roundsSlider = el('single-rounds');
+    if (convSel) convSel.value = next.conversation;
+    if (roundsSlider) { roundsSlider.value = next.rounds; el('single-rounds-val').innerText = next.rounds; }
+    startSingleRun(next.conversation, next.rounds);
+    return true;
   }
 
   function formatLatency(ms) {
@@ -408,22 +534,33 @@
       run_complete(d) {
         addSystemNote(logArea, 'Run complete. Output: ' + (d.output_dir || ''));
         finishSingleRun();
+        startNextQueuedRun(logArea);
       },
       error(d) {
         addSystemNote(logArea, d.message, true);
         finishSingleRun();
+        if (state.singleQueue.length > 0) {
+          addSystemNote(logArea, 'Queue cleared after error.', true);
+          state.singleQueue = [];
+          renderSingleQueue();
+        }
       },
       cancelled(d) {
         addSystemNote(logArea, 'Cancelled. Completed ' + d.completed + '/' + d.total);
         finishSingleRun();
+        if (state.singleQueue.length > 0) {
+          addSystemNote(logArea, 'Queue cleared after cancel.', true);
+          state.singleQueue = [];
+          renderSingleQueue();
+        }
       },
     };
   }
 
-  async function startSingleRun() {
-    const conv = el('single-conversation').value;
+  async function startSingleRun(convOverride, roundsOverride) {
+    const conv = convOverride || el('single-conversation').value;
     const env = el('global-environment').value;
-    const rounds = parseInt(el('single-rounds').value) || 1;
+    const rounds = roundsOverride || parseInt(el('single-rounds').value) || 1;
 
     if (!conv) { showToast('Please select a conversation', 'error'); return; }
 
@@ -598,13 +735,12 @@
     }
   }
 
-  function getBatchHandlers(ctx) {
+  function getBatchHandlers() {
     return {
       round_start(d) {
         state.batchRound = d.round;
         state.batchTotalRounds = d.total_rounds;
         state.batchCompleted = 0;
-        ctx.roundResults = [];
         updateBatchProgressText();
         
         const grid = el('batch-live-grid');
@@ -640,12 +776,10 @@
         state.batchCompleted++;
         const status = d.success ? 'pass' : 'fail';
         addOrUpdateGridItem(d.conv_no, d.application || d.conv_no, status, '');
-        ctx.roundResults.push(d);
         updateBatchProgressText();
         updateBatchProgressBar();
       },
       run_complete(d) {
-        if (ctx.roundResults.length > 0) addRoundSummary(state.batchRound, ctx.roundResults);
         showToast('Batch run complete', 'success');
         finishBatchRun();
       },
@@ -655,7 +789,6 @@
       },
       cancelled(d) {
         showToast('Cancelled. Completed ' + d.completed + '/' + d.total, 'error');
-        if (ctx.roundResults.length > 0) addRoundSummary(d.round || state.batchRound, ctx.roundResults);
         finishBatchRun();
       },
     };
@@ -676,23 +809,18 @@
     state.batchTotalRounds = snap.total_rounds || 1;
     state.batchCompleted = 0;
     state.batchTotal = snap.total || 0;
-    state.roundSummaries = [];
-    
+
     el('batch-live-grid').innerHTML = '';
-    el('batch-round-summaries').innerHTML = '';
     updateBatchProgress(0, 0, 0, 0);
-    
-    const ctx = { roundResults: [] };
-    const handlers = getBatchHandlers(ctx);
-    
+
+    const handlers = getBatchHandlers();
+
     snap.completedRounds.forEach(r => {
        handlers.round_start({ round: r.round, total_rounds: snap.total_rounds });
        r.results.forEach(res => {
          handlers.file_start({ total: snap.total, conv_no: res.conv_no, conv_file: res.conv_file });
          handlers.completed(res);
        });
-       addRoundSummary(r.round, r.results);
-       ctx.roundResults = [];
     });
     
     if (snap.round) {
@@ -729,10 +857,8 @@
     state.batchTotalRounds = rounds;
     state.batchCompleted = 0;
     state.batchTotal = 0;
-    state.roundSummaries = [];
 
     el('batch-live-grid').innerHTML = '';
-    el('batch-round-summaries').innerHTML = '';
     updateBatchProgress(0, 0, 0, 0);
 
     try {
@@ -746,8 +872,7 @@
       return;
     }
 
-    const ctx = { roundResults: [] };
-    connectSSE(getBatchHandlers(ctx));
+    connectSSE(getBatchHandlers());
   }
 
   function addOrUpdateGridItem(id, name, status, subText) {
@@ -826,24 +951,6 @@
     if (pctVal >= 100) bar.classList.add('complete');
   }
 
-  function addRoundSummary(round, results) {
-    const container = el('batch-round-summaries');
-    const passed = results.filter(r => r.success).length;
-    const failed = results.length - passed;
-    const div = document.createElement('div');
-    div.className = 'round-summary';
-    div.innerHTML =
-      '<div class="round-summary-header">Round ' + round + ' Summary</div>' +
-      '<div class="round-summary-stats">' +
-      '<span>Total: <strong>' + results.length + '</strong></span>' +
-      '<span>Passed: <strong style="color:#16a34a">' + passed + '</strong></span>' +
-      '<span>Failed: <strong style="color:#dc2626">' + failed + '</strong></span>' +
-      '<span>Pass Rate: <strong>' + (results.length > 0 ? (passed / results.length * 100).toFixed(1) : 0) + '%</strong></span>' +
-      '</div>';
-    container.prepend(div);
-    state.roundSummaries.push({ round, passed, failed, total: results.length });
-  }
-
   async function stopBatchRun() {
     try {
       const btn = el('batch-stop-btn');
@@ -890,58 +997,32 @@
   async function loadResultsSessions() {
     const data = await api('/api/results/sessions');
     state.sessions = data || [];
-    renderResultsTables(data || []);
+    renderResultsTable(data || []);
   }
 
-  function renderResultsTables(sessions) {
-    const batchSessions = sessions.filter(s => s.unique_convs > 1);
-    const singleSessions = sessions.filter(s => (s.unique_convs || 0) <= 1);
-    renderBatchResultsTable(batchSessions);
-    renderSingleResultsTable(singleSessions);
-  }
-
-  function renderBatchResultsTable(sessions) {
-    const tbody = el('results-batch-tbody');
+  function renderResultsTable(sessions) {
+    const tbody = el('results-sessions-tbody');
+    if (!tbody) return;
     tbody.innerHTML = '';
     if (sessions.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="table-empty"><div class="empty-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin: 0 auto; opacity: 0.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></div>No batch runs yet</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="table-empty"><div class="empty-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin: 0 auto; opacity: 0.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></div>No runs yet. Start one from the Run or Experiments page.</td></tr>';
       return;
     }
     sessions.forEach(s => {
+      const isBatch = (s.unique_convs || 0) > 1;
       const tr = document.createElement('tr');
       tr.className = 'clickable';
+      enableRowKeyboardActivation(tr);
       tr.innerHTML =
         '<td class="td-mono">' + escapeHtml(String(s.id).substring(0, 8)) + '</td>' +
         '<td>' + formatDate(s.timestamp) + '</td>' +
+        '<td>' + sessionTypeBadgeHTML(s) + '</td>' +
+        '<td>' + (isBatch ? '<span class="text-muted">' + (s.unique_convs || 0) + ' apps</span>' : escapeHtml(s.single_app_name || '—')) + '</td>' +
         '<td>' + escapeHtml(s.das_env || '—') + '</td>' +
         '<td>' + (s.total_iterations || '—') + '</td>' +
-        '<td>' + pct(s.grade_accuracy_avg) + '</td>' +
-        '<td>' + scoreDisplay(s.assumption_score_avg) + '</td>' +
+        '<td>' + pctColoredHTML(s.grade_accuracy_avg) + '</td>' +
+        '<td>' + scoreColoredHTML(s.assumption_score_avg) + '</td>' +
         '<td class="td-secondary" style="white-space:normal; max-width:200px;">' + escapeHtml(s.notes || '—') + '</td>';
-      tr.addEventListener('click', () => openSessionDetail(s.id));
-      tbody.appendChild(tr);
-    });
-  }
-
-  function renderSingleResultsTable(sessions) {
-    const tbody = el('results-single-tbody');
-    tbody.innerHTML = '';
-    if (sessions.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="table-empty"><div class="empty-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin: 0 auto; opacity: 0.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></div>No single runs yet</td></tr>';
-      return;
-    }
-    sessions.forEach(s => {
-      const tr = document.createElement('tr');
-      tr.className = 'clickable';
-      const passedAll = s.single_grade_passed && s.single_flow_completed;
-      tr.innerHTML =
-        '<td class="td-mono">' + escapeHtml(String(s.id).substring(0, 8)) + '</td>' +
-        '<td>' + formatDate(s.timestamp) + '</td>' +
-        '<td>' + escapeHtml(s.single_app_name || '—') + '</td>' +
-        '<td>' + escapeHtml(s.das_env || '—') + '</td>' +
-        '<td></td>';
-      const statusCell = tr.cells[4];
-      statusCell.appendChild(statusBadge(passedAll));
       tr.addEventListener('click', () => openSessionDetail(s.id));
       tbody.appendChild(tr);
     });
@@ -987,6 +1068,9 @@
     const panel = el('detail-panel');
     const overlay = el('detail-overlay');
     const body = el('detail-panel-body');
+    panel.classList.remove('compare-mode');
+
+    state.sessionDrilldownContext = { sessionId, results, sessionMeta, currentIndex: null };
 
     el('detail-panel-title').textContent = 'Session ' + String(sessionId).substring(0, 8);
     body.innerHTML = '';
@@ -1073,9 +1157,10 @@
         '<th>Application</th><th>Round</th><th>Grades</th><th>Assumptions</th><th>Flow</th><th>Actions</th>' +
         '</tr></thead>';
       const tbody = document.createElement('tbody');
-      results.forEach(r => {
+      results.forEach((r, idx) => {
         const tr = document.createElement('tr');
         tr.className = 'clickable';
+        enableRowKeyboardActivation(tr);
         tr.innerHTML =
           '<td>' + escapeHtml(r.application_name || '—') +
           '<div class="td-secondary">Conv #' + (r.conversation_no || r.conversation_id || '') + '</div></td>' +
@@ -1088,9 +1173,9 @@
         flowCell.appendChild(statusBadge(r.flow_completed));
         tr.querySelector('.drill-btn').addEventListener('click', (e) => {
           e.stopPropagation();
-          openResultDrillDown(r.id);
+          openResultDrillDownAt(idx);
         });
-        tr.addEventListener('click', () => openResultDrillDown(r.id));
+        tr.addEventListener('click', () => openResultDrillDownAt(idx));
         tbody.appendChild(tr);
       });
       table.appendChild(tbody);
@@ -1100,9 +1185,13 @@
 
     panel.classList.add('open');
     overlay.classList.add('open');
+    fadePanelBody();
   }
 
   async function openResultDrillDown(resultId) {
+    // Standalone open (not via the session table) — clear any stale session-nav
+    // context left over from a previous drilldown so renderDrillDownNavBar stays hidden.
+    state.sessionDrilldownContext = null;
     let data;
     try {
       data = await api('/api/results/detail/' + resultId);
@@ -1110,12 +1199,195 @@
     renderDrillDownPanel(data);
   }
 
+  /* Open a result by its position within the current session's result list, so
+     Prev/Next/jump navigation can move between conversations (and rounds) of the
+     same session without dropping back to the session table each time. */
+  async function openResultDrillDownAt(index) {
+    const ctx = state.sessionDrilldownContext;
+    if (!ctx || !ctx.results[index]) return;
+    ctx.currentIndex = index;
+    let data;
+    try {
+      data = await api('/api/results/detail/' + ctx.results[index].id);
+    } catch { return; }
+    renderDrillDownPanel(data);
+  }
+
+  function renderDrillDownNavBar(body) {
+    const ctx = state.sessionDrilldownContext;
+    if (!ctx || ctx.currentIndex == null) return;
+
+    const nav = document.createElement('div');
+    nav.className = 'drilldown-nav-bar';
+
+    const backBtn = document.createElement('button');
+    backBtn.className = 'btn btn-secondary btn-xs';
+    backBtn.innerHTML = ICON_ARROW_LEFT + 'Back to Session';
+    backBtn.addEventListener('click', () => renderSessionDetailPanel(ctx.sessionId, ctx.results, ctx.sessionMeta));
+    nav.appendChild(backBtn);
+
+    const prevBtn = document.createElement('button');
+    prevBtn.className = 'btn btn-secondary btn-xs';
+    prevBtn.textContent = '‹ Prev';
+    prevBtn.disabled = ctx.currentIndex <= 0;
+    prevBtn.addEventListener('click', () => openResultDrillDownAt(ctx.currentIndex - 1));
+    nav.appendChild(prevBtn);
+
+    const select = document.createElement('select');
+    select.className = 'form-input drilldown-nav-select';
+    ctx.results.forEach((r, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = 'Round ' + (r.round_no || '—') + ' · Conv #' + (r.conversation_no || r.conversation_id || '') + ' · ' + (r.application_name || '');
+      if (i === ctx.currentIndex) opt.selected = true;
+      select.appendChild(opt);
+    });
+    select.addEventListener('change', () => openResultDrillDownAt(parseInt(select.value)));
+    nav.appendChild(select);
+
+    const nextBtn = document.createElement('button');
+    nextBtn.className = 'btn btn-secondary btn-xs';
+    nextBtn.textContent = 'Next ›';
+    nextBtn.disabled = ctx.currentIndex >= ctx.results.length - 1;
+    nextBtn.addEventListener('click', () => openResultDrillDownAt(ctx.currentIndex + 1));
+    nav.appendChild(nextBtn);
+
+    body.appendChild(nav);
+
+    // Compare this conversation's result against a different round of the SAME
+    // application — comparing two different applications tells you nothing (they
+    // have different expected grades/CTQs entirely), but the same app across rounds
+    // shows whether a failure is consistent or one-off.
+    const current = ctx.results[ctx.currentIndex];
+    const currentKey = current.conversation_no != null ? current.conversation_no : current.conversation_id;
+    const sameApp = ctx.results
+      .map((r, i) => ({ r, i }))
+      .filter(({ r, i }) => {
+        if (i === ctx.currentIndex) return false;
+        const key = r.conversation_no != null ? r.conversation_no : r.conversation_id;
+        return key === currentKey;
+      })
+      .sort((a, b) => (a.r.round_no || 0) - (b.r.round_no || 0));
+
+    if (sameApp.length > 0) {
+      const compareBar = document.createElement('div');
+      compareBar.className = 'drilldown-nav-bar';
+
+      const label = document.createElement('span');
+      label.className = 'text-muted text-sm';
+      label.style.flexShrink = '0';
+      label.textContent = 'Compare with round:';
+      compareBar.appendChild(label);
+
+      const compareSelect = document.createElement('select');
+      compareSelect.className = 'form-input drilldown-nav-select';
+      sameApp.forEach(({ r, i }) => {
+        const opt = document.createElement('option');
+        opt.value = i;
+        // grades_passed comes back from SQLite as 0/1/null, not true/false/null —
+        // a strict `=== false` check never matches the number 0, so failed rounds
+        // fell through to "N/A" instead of "FAIL".
+        const passLabel = r.grades_passed == null ? 'N/A' : (r.grades_passed ? 'PASS' : 'FAIL');
+        opt.textContent = 'Round ' + (r.round_no || '—') + ' · ' + passLabel;
+        compareSelect.appendChild(opt);
+      });
+      compareBar.appendChild(compareSelect);
+
+      const compareBtn = document.createElement('button');
+      compareBtn.className = 'btn btn-secondary btn-xs';
+      compareBtn.textContent = 'Compare';
+      compareBtn.addEventListener('click', () => openCompareView(ctx.currentIndex, parseInt(compareSelect.value)));
+      compareBar.appendChild(compareBtn);
+
+      body.appendChild(compareBar);
+    }
+  }
+
+  async function openCompareView(indexA, indexB) {
+    const ctx = state.sessionDrilldownContext;
+    if (!ctx || !ctx.results[indexA] || !ctx.results[indexB]) return;
+    let dataA, dataB;
+    try {
+      [dataA, dataB] = await Promise.all([
+        api('/api/results/detail/' + ctx.results[indexA].id),
+        api('/api/results/detail/' + ctx.results[indexB].id),
+      ]);
+    } catch { return; }
+    renderCompareView(dataA, dataB, indexA, indexB);
+  }
+
+  function compareColumnHTML(data) {
+    const turns = typeof data.actual_turns_json === 'string' ? safeJSON(data.actual_turns_json) : data.actual_turns_json;
+    const assumptionEval = typeof data.assumption_eval_details === 'string' ? safeJSON(data.assumption_eval_details) : data.assumption_eval_details;
+    let html =
+      '<div class="detail-grid mb-4">' +
+      '<div class="detail-field"><span class="detail-field-label">Application</span><span class="detail-field-value">' + escapeHtml(data.application_name || '—') + '</span></div>' +
+      '<div class="detail-field"><span class="detail-field-label">Conversation</span><span class="detail-field-value">#' + (data.conversation_no || data.conversation_id || '') + '</span></div>' +
+      '<div class="detail-field"><span class="detail-field-label">Total Duration</span><span class="detail-field-value">' + (data.total_duration_ms != null ? formatLatency(data.total_duration_ms) : '—') + '</span></div>' +
+      '<div class="detail-field"><span class="detail-field-label">Avg Response Time</span><span class="detail-field-value">' + (data.avg_turn_latency_ms != null ? formatLatency(data.avg_turn_latency_ms) : '—') + '</span></div>' +
+      '</div>' +
+      '<div class="detail-field mb-2"><span class="detail-field-label">Grades</span> </div>' +
+      '<div class="mb-2">Expected: ' + escapeHtml(data.expected_grades || '—') + '</div>' +
+      '<div class="mb-4">Suggested: ' + formatSuggestedGrades(data.suggested_grades) + '</div>' +
+      '<div class="detail-field mb-2"><span class="detail-field-label">Assumption Score</span> <span class="detail-field-value" style="display:inline">' + scoreDisplay(data.assumptions_score) + '</span></div>' +
+      '<div class="mb-4">' + renderCTQListHTML(assumptionEval) + '</div>' +
+      '<div class="detail-section-title">Conversation Turns</div>' +
+      '<div class="turn-list">';
+    (turns || []).forEach(t => {
+      const isUser = t.role === 'user';
+      html += '<div class="turn-item ' + (isUser ? 'user-turn' : 'agent-turn') + '">' +
+        '<span class="turn-role ' + (isUser ? 'user' : 'agent') + '">' + (isUser ? 'User' : 'Agent') + '</span>' +
+        '<span class="turn-content">' + escapeHtml(t.content || '') + '</span>' +
+        '</div>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function renderCompareView(dataA, dataB, indexA, indexB) {
+    const panel = el('detail-panel');
+    const body = el('detail-panel-body');
+    panel.classList.add('compare-mode');
+    el('detail-panel-title').textContent = (dataA.application_name || 'Comparison') + ' — Round ' + (dataA.round_no || '—') + ' vs Round ' + (dataB.round_no || '—');
+    body.innerHTML = '';
+
+    const backBtn = document.createElement('button');
+    backBtn.className = 'btn btn-secondary btn-xs mb-4';
+    backBtn.innerHTML = ICON_ARROW_LEFT + 'Back';
+    backBtn.addEventListener('click', () => openResultDrillDownAt(indexA != null ? indexA : 0));
+    body.appendChild(backBtn);
+
+    const grid = document.createElement('div');
+    grid.className = 'compare-grid';
+
+    const gradeBadgeA = statusBadge(dataA.grades_passed).outerHTML;
+    const gradeBadgeB = statusBadge(dataB.grades_passed).outerHTML;
+
+    const colA = document.createElement('div');
+    colA.className = 'compare-column';
+    colA.innerHTML = '<div class="compare-column-header">' + gradeBadgeA + '</div>' + compareColumnHTML(dataA);
+
+    const colB = document.createElement('div');
+    colB.className = 'compare-column';
+    colB.innerHTML = '<div class="compare-column-header">' + gradeBadgeB + '</div>' + compareColumnHTML(dataB);
+
+    grid.appendChild(colA);
+    grid.appendChild(colB);
+    body.appendChild(grid);
+
+    panel.classList.add('open');
+    el('detail-overlay').classList.add('open');
+    fadePanelBody();
+  }
+
   function renderDrillDownPanel(data) {
     const panel = el('detail-panel');
     const body = el('detail-panel-body');
+    panel.classList.remove('compare-mode');
     el('detail-panel-title').textContent = data.application_name || 'Result Detail';
 
     body.innerHTML = '';
+    renderDrillDownNavBar(body);
 
     /* Overview Section */
     const overview = document.createElement('div');
@@ -1204,23 +1476,9 @@
 
     if (data.assumption_eval_details) {
       const aDetails = typeof data.assumption_eval_details === 'string' ? safeJSON(data.assumption_eval_details) : data.assumption_eval_details;
-      if (aDetails) {
-        const aItems = Array.isArray(aDetails) ? aDetails : [aDetails];
-        aItems.forEach(item => {
-          const aDiv = document.createElement('div');
-          aDiv.className = 'eval-item';
-          const matched = item.matched || item.status === 'matched';
-          aDiv.innerHTML =
-            '<div class="eval-item-header"><span class="eval-item-title">' + escapeHtml(item.ctq || item.name || 'CTQ') + '</span>' +
-            (matched !== undefined ? matchIndicatorHTML(matched) : '') +
-            '</div>' +
-            '<div class="eval-item-body">' +
-            (item.reasoning ? escapeHtml(item.reasoning) : '') +
-            (item.details ? escapeHtml(item.details) : '') +
-            '</div>';
-          assumeSection.appendChild(aDiv);
-        });
-      }
+      const ctqWrap = document.createElement('div');
+      ctqWrap.innerHTML = renderCTQListHTML(aDetails);
+      assumeSection.appendChild(ctqWrap);
     }
     body.appendChild(assumeSection);
 
@@ -1280,7 +1538,10 @@
       '<label class="form-label">Assumption Score</label>' +
       '<input type="number" step="0.01" class="form-input" id="override-assumption" value="' + (data.assumptions_score || '') + '">' +
       '</div>' +
-      '<button class="btn btn-primary btn-sm" id="override-save-btn">Save Override</button>';
+      '<div class="form-group">' +
+      '<label class="form-label" style="visibility:hidden">Save</label>' +
+      '<button class="btn btn-primary btn-sm" id="override-save-btn">Save Override</button>' +
+      '</div>';
     overrideSection.appendChild(form);
     body.appendChild(overrideSection);
 
@@ -1299,6 +1560,7 @@
 
     panel.classList.add('open');
     el('detail-overlay').classList.add('open');
+    fadePanelBody();
 
     const jsonBtn = el('drill-raw-json-btn');
     if (jsonBtn) {
@@ -1309,6 +1571,15 @@
       });
     }
 
+    /* Turn Timing Section — already-saved per-turn agent/tool breakdown, if any */
+    const turnTraces = typeof data.turn_traces_json === 'string' ? safeJSON(data.turn_traces_json) : data.turn_traces_json;
+    const timingSection = document.createElement('div');
+    timingSection.className = 'detail-section mt-4';
+    timingSection.innerHTML = '<div class="detail-section-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Turn Timing</div>' +
+      '<div id="drill-turn-timing-list"></div>';
+    body.appendChild(timingSection);
+    renderTurnTimingTable(turnTraces, timingSection.querySelector('#drill-turn-timing-list'));
+
     /* MLflow Section */
     const traceSection = document.createElement('div');
     traceSection.className = 'detail-section mt-4';
@@ -1316,6 +1587,7 @@
       '<p class="text-muted text-sm mb-2">Fetch execution traces from MLflow (tool calls, sub-agent spans, latencies). Use this ID to look the conversation up directly in MLflow too:</p>' +
       (data.conversation_id ? '<div class="mb-2">' + conversationIdChipHTML(data.conversation_id) + '</div>' : '') +
       '<button id="drill-mlflow-btn" class="btn btn-secondary btn-xs mb-2">Fetch Traces</button>' +
+      '<button id="drill-mlflow-backfill-btn" class="btn btn-secondary btn-xs mb-2" style="margin-left:8px;" title="Fetch and save per-turn agent/tool timing for this conversation, so it appears in a regenerated report">Save Timing to Report</button>' +
       '<div id="drill-mlflow-results"></div>';
     body.appendChild(traceSection);
 
@@ -1333,6 +1605,23 @@
             el('drill-mlflow-results').innerHTML = '<p class="text-muted" style="color:var(--danger)">Failed to fetch traces: ' + escapeHtml(e.message || 'unknown error') + '</p>';
           }
           fetchBtn.style.display = 'none';
+        });
+      }
+      const backfillBtn = el('drill-mlflow-backfill-btn');
+      if (backfillBtn) {
+        backfillBtn.addEventListener('click', async () => {
+          backfillBtn.innerHTML = '<span class="spinner" style="width:12px;height:12px;margin-right:6px;display:inline-block"></span>Saving...';
+          backfillBtn.disabled = true;
+          try {
+            const envParam = data.das_env || data.environment || 'Local';
+            const res = await api('/api/mlflow/backfill/' + encodeURIComponent(data.conversation_id) + '?env=' + encodeURIComponent(envParam), { method: 'POST' });
+            renderTurnTimingTable(res.turnTraces, timingSection.querySelector('#drill-turn-timing-list'));
+            showToast('Turn timing saved to report', 'success');
+            backfillBtn.style.display = 'none';
+          } catch (e) {
+            backfillBtn.disabled = false;
+            backfillBtn.textContent = 'Save Timing to Report';
+          }
         });
       }
     }, 50);
@@ -1476,20 +1765,41 @@
     });
   }
 
+  /* Per-turn agent/tool timing breakdown — the data saved to turn_traces_json and
+     exported as the timing_round{N} report sheet. Reused in the Traces tab and the
+     result drill-down. */
+  function renderTurnTimingTable(turnTraces, container) {
+    if (!turnTraces || turnTraces.length === 0) {
+      container.innerHTML = '<p class="text-muted text-sm">No turn timing data saved for this conversation yet.</p>';
+      return;
+    }
+    container.innerHTML = '';
+    turnTraces.forEach(turn => {
+      const row = document.createElement('div');
+      row.className = 'turn-timing-row';
+      const calls = (turn.agentCalls || []).map(c =>
+        '<span class="turn-timing-pill ' + spanTypeClass(c.type) + '">' + escapeHtml(c.name || '') + ' &middot; ' + (c.durationMs != null ? formatLatency(c.durationMs) : '—') + '</span>'
+      ).join('');
+      row.innerHTML =
+        '<div class="turn-timing-header">' +
+        '<span class="turn-timing-no">Turn ' + (turn.turnNo != null ? turn.turnNo : '—') + '</span>' +
+        '<span class="turn-timing-input" title="' + escapeHtml(turn.userInput || '') + '">' + escapeHtml(turn.userInput || '') + '</span>' +
+        '<span class="turn-timing-latency">' + (turn.responseTimeMs != null ? formatLatency(turn.responseTimeMs) : '—') + '</span>' +
+        '</div>' +
+        (calls ? '<div class="turn-timing-calls">' + calls + '</div>' : '<div class="text-muted text-sm">No agent/tool breakdown captured for this turn.</div>');
+      container.appendChild(row);
+    });
+  }
+
   function closeDetailPanel() {
     el('detail-panel').classList.remove('open');
+    el('detail-panel').classList.remove('compare-mode');
     el('detail-overlay').classList.remove('open');
   }
 
   /* ----------------------------------------------------------
      Dashboard Page
   ---------------------------------------------------------- */
-  function sessionPassRate(s) {
-    if (s.grade_accuracy_avg != null) return s.grade_accuracy_avg;
-    if (s.single_grade_passed != null) return s.single_grade_passed ? 100 : 0;
-    return null;
-  }
-
   async function loadDashboardOverview() {
     let sessions;
     try {
@@ -1497,13 +1807,11 @@
     } catch {
       return;
     }
-    sessions = sessions || [];
+    // Single-conversation runs aren't "sessions" — keep Home consistent with
+    // the batch-session dropdown below, which already filters these out.
+    sessions = (sessions || []).filter(s => s.unique_convs > 1);
 
     el('ov-stat-total-runs').textContent = sessions.length;
-
-    const latest = sessions[0];
-    const latestPass = latest ? sessionPassRate(latest) : null;
-    el('ov-stat-latest-pass').textContent = latestPass != null ? pct(latestPass) : '—';
 
     const assumptionScores = sessions.map(s => s.assumption_score_avg).filter(v => v != null);
     const avgAssumption = assumptionScores.length ? assumptionScores.reduce((a, b) => a + b, 0) / assumptionScores.length : null;
@@ -1512,51 +1820,6 @@
     const latencies = sessions.map(s => s.avg_latency_ms).filter(v => v != null);
     const avgLatency = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null;
     el('ov-stat-latency').textContent = avgLatency != null ? formatLatency(avgLatency) : '—';
-
-    renderOverviewTrend(sessions.slice(0, 10));
-    renderRecentRunsTable(sessions.slice(0, 10));
-  }
-
-  function renderOverviewTrend(recentSessions) {
-    const container = el('ov-trend-chart');
-    if (!recentSessions.length) {
-      container.innerHTML = '<p class="text-muted text-sm">No runs yet.</p>';
-      return;
-    }
-    const chronological = recentSessions.slice().reverse();
-    container.innerHTML = '';
-    chronological.forEach(s => {
-      const rate = sessionPassRate(s);
-      const rateVal = rate != null ? rate : 0;
-      container.innerHTML +=
-        '<div class="bar-row">' +
-        '<span class="bar-label" title="' + formatDate(s.timestamp) + '">' + String(s.id).substring(0, 8) + '</span>' +
-        '<div class="bar-track"><div class="bar-fill ' + (rateVal >= 70 ? 'green' : 'blue') + '" style="width:' + rateVal + '%"></div></div>' +
-        '<span class="bar-value">' + (rate != null ? rate.toFixed(0) + '%' : '—') + '</span>' +
-        '</div>';
-    });
-  }
-
-  function renderRecentRunsTable(recentSessions) {
-    const tbody = el('ov-recent-runs-tbody');
-    tbody.innerHTML = '';
-    if (!recentSessions.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No runs yet. Start one from the Run or Experiments page.</td></tr>';
-      return;
-    }
-    recentSessions.forEach(s => {
-      const tr = document.createElement('tr');
-      tr.className = 'clickable';
-      tr.innerHTML =
-        '<td class="td-mono">' + escapeHtml(String(s.id).substring(0, 8)) + '</td>' +
-        '<td>' + formatDate(s.timestamp) + '</td>' +
-        '<td>' + escapeHtml(s.das_env || '—') + '</td>' +
-        '<td>' + pct(s.grade_accuracy_avg) + '</td>' +
-        '<td>' + scoreDisplay(s.assumption_score_avg) + '</td>' +
-        '<td>' + (s.avg_latency_ms != null ? formatLatency(s.avg_latency_ms) : '—') + '</td>';
-      tr.addEventListener('click', () => openSessionDetail(s.id));
-      tbody.appendChild(tr);
-    });
   }
 
   async function loadDashboardSessions() {
@@ -1625,8 +1888,7 @@
 
     renderHeatmap(filtered);
     renderDashboardCharts(filtered);
-    renderFlakiness(filtered);
-    renderFailureClusters(filtered);
+    renderAppAccuracy(filtered);
 
     const display = el('dash-rounds-display');
     if (display) display.textContent = 'round 1 – ' + visible + ' of ' + maxRounds;
@@ -1636,88 +1898,55 @@
     if (plusBtn) plusBtn.disabled = visible >= maxRounds;
   }
 
-  function renderFlakiness(results) {
-    const container = el('dashboard-flakiness');
+  /* Per-application pass rate across the included rounds — the same PASS/FAIL-per-round
+     view as the Excel overview sheet's per-conversation matrix, condensed for the
+     dashboard's right rail. */
+  function renderAppAccuracy(results) {
+    const container = el('dashboard-app-accuracy');
     if (!container) return;
 
-    const byApp = {};
+    const byConv = {};
     results.forEach(r => {
-      const key = r.application_name || r.conversation_id;
-      if (!byApp[key]) byApp[key] = { passCount: 0, total: 0, rounds: [] };
-      byApp[key].total++;
-      if (r.grades_passed) byApp[key].passCount++;
-      byApp[key].rounds.push({ round: r.round_no, passed: !!r.grades_passed });
+      const key = r.conversation_no != null ? r.conversation_no : r.conversation_id;
+      if (!byConv[key]) byConv[key] = { app: r.application_name || r.conversation_id, rounds: [] };
+      byConv[key].rounds.push({ round: r.round_no, passed: r.grades_passed });
     });
 
-    const flaky = Object.keys(byApp)
-      .map(key => {
-        const b = byApp[key];
-        return { app: key, passCount: b.passCount, total: b.total, rounds: b.rounds, rate: (b.passCount / b.total) * 100 };
-      })
-      .filter(x => x.total > 1 && x.rate > 0 && x.rate < 100)
-      .sort((a, b) => a.rate - b.rate);
+    const rows = Object.values(byConv).map(c => {
+      const graded = c.rounds.filter(r => r.passed !== null && r.passed !== undefined);
+      const passCount = graded.filter(r => r.passed).length;
+      const score = graded.length > 0 ? (passCount / graded.length) * 100 : null;
+      return { app: c.app, rounds: c.rounds, passCount, total: graded.length, score };
+    }).sort((a, b) => (a.score == null ? 101 : a.score) - (b.score == null ? 101 : b.score));
 
-    if (flaky.length === 0) {
-      container.innerHTML = '<p class="text-muted text-sm">No flaky conversations in the selected rounds — results are consistent.</p>';
+    if (rows.length === 0) {
+      container.innerHTML = '<p class="text-muted text-sm">No data for this session.</p>';
       return;
     }
 
+    const LOW_ACCURACY_THRESHOLD = 66;
     container.innerHTML = '';
-    flaky.forEach(item => {
-      const row = document.createElement('div');
-      row.className = 'flakiness-row';
-      const dots = item.rounds
+    rows.forEach(row => {
+      const isLow = row.score != null && row.score < LOW_ACCURACY_THRESHOLD;
+      const div = document.createElement('div');
+      div.className = 'flakiness-row' + (isLow ? ' low-accuracy' : '');
+      const dots = row.rounds
         .slice()
         .sort((a, b) => (a.round || 0) - (b.round || 0))
-        .map(r => '<span class="flakiness-dot ' + (r.passed ? 'pass' : 'fail') + '" title="Round ' + r.round + ': ' + (r.passed ? 'PASS' : 'FAIL') + '"></span>')
+        .map(r => {
+          // r.passed is the raw grades_passed value from SQLite: 0/1/null, not
+          // true/false/null — a strict === check against booleans silently misses
+          // every failed round (0 !== false) and mislabels it "N/A" instead of "FAIL".
+          const cls = r.passed == null ? 'na' : (r.passed ? 'pass' : 'fail');
+          const label = r.passed == null ? 'N/A' : (r.passed ? 'PASS' : 'FAIL');
+          return '<span class="flakiness-dot ' + cls + '" title="Round ' + r.round + ': ' + label + '"></span>';
+        })
         .join('');
-      row.innerHTML =
-        '<span class="flakiness-app">' + escapeHtml(item.app) + '</span>' +
+      div.innerHTML =
+        '<span class="flakiness-app" title="' + escapeHtml(row.app) + '">' + escapeHtml(row.app) + '</span>' +
         '<span class="flakiness-dots">' + dots + '</span>' +
-        '<span class="flakiness-rate">' + item.rate.toFixed(0) + '% (' + item.passCount + '/' + item.total + ')</span>';
-      container.appendChild(row);
-    });
-  }
-
-  function categorizeFailure(r) {
-    if (r.grades_passed && r.flow_completed) return null;
-    const err = (r.error_message || '').trim();
-    if (err.indexOf('DAS API error') === 0) return 'DAS API Error';
-    if (err.indexOf('Simulator agent error') === 0) return 'Simulator Agent Error';
-    if (!r.flow_completed && !err) return 'Max Turns Reached';
-    if (r.flow_completed && !r.grades_passed) return 'Grade Mismatch';
-    if (err) return 'Other Error';
-    return 'Unknown Failure';
-  }
-
-  function renderFailureClusters(results) {
-    const container = el('dashboard-failure-clusters');
-    if (!container) return;
-
-    const counts = {};
-    results.forEach(r => {
-      const cat = categorizeFailure(r);
-      if (!cat) return;
-      counts[cat] = (counts[cat] || 0) + 1;
-    });
-
-    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-    if (entries.length === 0) {
-      container.innerHTML = '<p class="text-muted text-sm">No failures in the selected rounds.</p>';
-      return;
-    }
-
-    const maxCount = Math.max(...entries.map(e => e[1]));
-    container.innerHTML = '';
-    entries.forEach(([cat, count]) => {
-      const pctWidth = maxCount > 0 ? (count / maxCount) * 100 : 0;
-      const row = document.createElement('div');
-      row.className = 'bar-row';
-      row.innerHTML =
-        '<span class="bar-label" style="width:160px;">' + escapeHtml(cat) + '</span>' +
-        '<div class="bar-track"><div class="bar-fill red" style="width:' + pctWidth + '%"></div></div>' +
-        '<span class="bar-value">' + count + '</span>';
-      container.appendChild(row);
+        '<span class="flakiness-rate">' + (row.score != null ? row.score.toFixed(0) + '% (' + row.passCount + '/' + row.total + ')' : '—') + '</span>';
+      container.appendChild(div);
     });
   }
 
@@ -1775,7 +2004,7 @@
     /* Summary row */
     const summaryRow = document.createElement('div');
     summaryRow.className = 'heatmap-row heatmap-summary-row';
-    summaryRow.innerHTML = '<div class="heatmap-cell heatmap-header">Total</div>';
+    summaryRow.innerHTML = '<div class="heatmap-cell heatmap-header heatmap-app-label">Total</div>';
     rounds.forEach(r => {
       const t = roundTotals[r];
       summaryRow.innerHTML += '<div class="heatmap-cell">' + t.pass + 'P / ' + t.fail + 'F</div>';
@@ -1988,7 +2217,7 @@
     const tbody = el('history-tbody');
     tbody.innerHTML = '';
     if (sessions.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="table-empty"><div class="empty-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin: 0 auto; opacity: 0.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div>No sessions found</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="table-empty"><div class="empty-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin: 0 auto; opacity: 0.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div>No sessions found</td></tr>';
       return;
     }
     sessions.forEach(s => {
@@ -1996,11 +2225,12 @@
       tr.innerHTML =
         '<td class="td-mono">' + escapeHtml(String(s.id).substring(0, 8)) + '</td>' +
         '<td>' + formatDate(s.timestamp) + '</td>' +
+        '<td>' + sessionTypeBadgeHTML(s) + '</td>' +
         '<td>' + escapeHtml(s.das_env || '—') + '</td>' +
         '<td>' + (s.total_iterations || '—') + '</td>' +
         '<td>' + (s.unique_convs || '—') + '</td>' +
         '<td class="btn-group"></td>';
-      const actions = tr.cells[5];
+      const actions = tr.cells[6];
       const viewBtn = document.createElement('button');
       viewBtn.className = 'btn btn-xs btn-secondary';
       viewBtn.textContent = 'View';
@@ -2141,6 +2371,7 @@
   ---------------------------------------------------------- */
   function initMLflow() {
     on('trace-fetch-btn', 'click', fetchMLflowTraces);
+    on('trace-backfill-btn', 'click', backfillMLflowTiming);
   }
 
   async function fetchMLflowTraces() {
@@ -2158,6 +2389,29 @@
 
     el('trace-fetch-btn').disabled = false;
     el('trace-fetch-btn').textContent = 'Fetch Traces';
+  }
+
+  async function backfillMLflowTiming() {
+    const convId = el('trace-conv-id').value;
+    if (!convId) { showToast('Please enter a conversation ID', 'error'); return; }
+
+    const btn = el('trace-backfill-btn');
+    const statusEl = el('trace-backfill-status');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;margin-right:6px;display:inline-block"></span>Saving...';
+    statusEl.textContent = '';
+
+    try {
+      const env = el('global-environment').value || 'Local';
+      const data = await api('/api/mlflow/backfill/' + encodeURIComponent(convId) + '?env=' + encodeURIComponent(env), { method: 'POST' });
+      statusEl.textContent = 'Saved timing for ' + (data.turnTraces || []).length + ' turn(s) — will appear in this result\'s report on next regenerate.';
+      showToast('Turn timing saved to report', 'success');
+      show(el('trace-turn-timing-area'));
+      renderTurnTimingTable(data.turnTraces, el('trace-turn-timing-list'));
+    } catch { }
+
+    btn.disabled = false;
+    btn.textContent = 'Save Timing to Report';
   }
 
   function renderMLflowTraces(data) {
@@ -2201,6 +2455,7 @@
     convs.forEach(c => {
       const tr = document.createElement('tr');
       tr.className = 'clickable';
+      enableRowKeyboardActivation(tr);
       tr.innerHTML =
         '<td class="td-mono">' + c.conversationNo + '</td>' +
         '<td>' + escapeHtml(c.application) + '</td>' +

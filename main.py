@@ -49,7 +49,8 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
             api_url=api_url,
             api_key=api_key,
             use_llm_eval=use_llm_eval,
-            on_progress=on_progress
+            on_progress=on_progress,
+            das_env=das_env,
         )
         
         
@@ -80,6 +81,7 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
             actual_turns_json=json.dumps(result.get("actualTurns", [])),
             grade_eval_details=json.dumps(result.get("gradeEvaluation", {})),
             assumption_eval_details=json.dumps(result.get("assumptionEvaluation", {})),
+            turn_traces_json=json.dumps(result.get("turnTraces", [])),
             total_duration_ms=result.get("timing", {}).get("totalDurationMs"),
             avg_turn_latency_ms=result.get("timing", {}).get("avgTurnLatencyMs"),
             grade_eval_ms=result.get("timing", {}).get("gradeEvalMs"),
@@ -137,7 +139,8 @@ async def run_all_tests_async(num_rounds: int, use_llm_eval: bool, das_env: str,
             api_url=api_url,
             api_key=api_key,
             use_llm_eval=use_llm_eval,
-            on_progress=on_progress
+            on_progress=on_progress,
+            das_env=das_env,
         )
 
         result_file = round_dir / f"result_{conv_file.stem}.json"
@@ -167,6 +170,7 @@ async def run_all_tests_async(num_rounds: int, use_llm_eval: bool, das_env: str,
             actual_turns_json=json.dumps(result.get("actualTurns", [])),
             grade_eval_details=json.dumps(result.get("gradeEvaluation", {})),
             assumption_eval_details=json.dumps(result.get("assumptionEvaluation", {})),
+            turn_traces_json=json.dumps(result.get("turnTraces", [])),
             total_duration_ms=result.get("timing", {}).get("totalDurationMs"),
             avg_turn_latency_ms=result.get("timing", {}).get("avgTurnLatencyMs"),
             grade_eval_ms=result.get("timing", {}).get("gradeEvalMs"),

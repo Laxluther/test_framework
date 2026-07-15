@@ -29,6 +29,9 @@ ASSUMPTION_WIDTHS = [5, 28, 10, 10, 9, 9, 38, 55, 38, 35, 38, 55, 45, 12, 55]
 
 OVERVIEW_SUMMARY_HEADERS = ["PASS", "FAIL", "Score", ">80%", ">70%", ">60%"]
 
+TIMING_HEADERS = ["No.", "Application", "Turn", "User Input", "Response Time (ms)", "Agent / Tool", "Type", "Call Duration (ms)"]
+TIMING_WIDTHS = [6, 22, 7, 45, 16, 30, 10, 16]
+
 def _pass_fill(passed: bool | None) -> PatternFill:
     if passed is None: return PatternFill(fill_type=None)
     return GREEN if passed else RED
@@ -141,6 +144,79 @@ def build_assumption_sheet(ws, results: list[dict]):
                 cell.fill = _pass_fill(eval_data.get("passed"))
             if ASSUMPTION_HEADERS[c_idx-1] == "Score /10":
                 cell.fill = _score_fill(eval_data.get("overallScore"))
+
+def _fmt_ms(ms):
+    return round(ms, 1) if ms is not None else ""
+
+def build_timing_sheet(ws, results: list[dict]):
+    """Per-round timing breakdown: for every conversation, every turn's input/output
+    response time, and (when MLflow trace data was captured) which agents/tools ran
+    inside that turn and how long each took. Ends with round-level overall/avg summary."""
+    _set_col_widths(ws, TIMING_WIDTHS)
+    _hdr(ws, TIMING_HEADERS, 1, GREY_HDR)
+
+    def _write_row(r_idx, row_data):
+        for c_idx, val in enumerate(row_data, 1):
+            cell = ws.cell(row=r_idx, column=c_idx, value=val)
+            cell.font = CELL_FONT
+            cell.alignment = WRAP
+            cell.border = THIN
+            if c_idx % 2 == 0:
+                cell.fill = ALT_ROW
+
+    r_idx = 2
+    round_total_ms = 0.0
+    round_total_count = 0
+    turn_latencies = []
+
+    for res in results:
+        conv_no = res.get("conversationNo", "")
+        app_name = res.get("application", "")
+        turn_traces = res.get("turnTraces") or []
+
+        conv_total = (res.get("timing") or {}).get("totalDurationMs")
+        if conv_total is not None:
+            round_total_ms += conv_total
+            round_total_count += 1
+
+        if not turn_traces:
+            _write_row(r_idx, [conv_no, app_name, "", "(no turn trace data captured for this run)", "", "", "", ""])
+            r_idx += 1
+            continue
+
+        for turn in turn_traces:
+            response_ms = turn.get("responseTimeMs")
+            if response_ms is not None:
+                turn_latencies.append(response_ms)
+            agent_calls = turn.get("agentCalls") or []
+            if not agent_calls:
+                _write_row(r_idx, [conv_no, app_name, turn.get("turnNo", ""), turn.get("userInput", ""), _fmt_ms(response_ms), "", "", ""])
+                r_idx += 1
+            else:
+                for call in agent_calls:
+                    _write_row(r_idx, [
+                        conv_no, app_name, turn.get("turnNo", ""), turn.get("userInput", ""), _fmt_ms(response_ms),
+                        call.get("name", ""), call.get("type", ""), _fmt_ms(call.get("durationMs")),
+                    ])
+                    r_idx += 1
+
+    r_idx += 1
+    avg_turn_ms = sum(turn_latencies) / len(turn_latencies) if turn_latencies else None
+    for label, val in [
+        ("Round Overall Time (sum of conversation durations)", _fmt_ms(round_total_ms) if round_total_count else ""),
+        ("Avg Turn Response Time (this round)", _fmt_ms(avg_turn_ms) if avg_turn_ms is not None else ""),
+    ]:
+        label_cell = ws.cell(row=r_idx, column=1, value=label)
+        label_cell.font = WHITE_BOLD
+        label_cell.fill = BLUE_HDR
+        label_cell.border = THIN
+        ws.merge_cells(start_row=r_idx, start_column=1, end_row=r_idx, end_column=4)
+        val_cell = ws.cell(row=r_idx, column=5, value=val)
+        val_cell.font = BLACK_BOLD
+        val_cell.border = THIN
+        r_idx += 1
+
+    ws.freeze_panes = "A2"
 
 def build_overview_sheet(ws, results_by_round: dict[int, list[dict]]):
     """Cross-round PASS/FAIL matrix: one row per conversation, one column per
@@ -288,6 +364,9 @@ def generate_report_from_results_by_round(results_by_round: dict[int, list[dict]
         if has_assumptions:
             ws_assumptions = wb.create_sheet(title=f"assumption_round{round_no}")
             build_assumption_sheet(ws_assumptions, results)
+
+        ws_timing = wb.create_sheet(title=f"timing_round{round_no}")
+        build_timing_sheet(ws_timing, results)
 
     if not wb.sheetnames:
         wb.create_sheet("Empty")

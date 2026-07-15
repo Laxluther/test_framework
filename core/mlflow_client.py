@@ -102,3 +102,60 @@ def get_traces_for_conversation(conversation_id, env_name="Local"):
         return result
     except Exception as e:
         return {"error": str(e), "traces": []}
+
+def summarize_turn_traces(conversation_id: str, env_name: str = "Local", turn_count: int = None) -> list[dict]:
+    """Match each MLflow trace for this conversation to a DAS turn — DAS creates one
+    trace per request, so ordering traces by timestamp lines them up with turns 1..N —
+    and summarize which agents/tools ran in that turn and how long each took. Returns
+    [] on any failure (no URI configured, unreachable, no traces yet): this is best-effort
+    enrichment on top of a test run, never something that should fail the run itself."""
+    try:
+        data = get_traces_for_conversation(conversation_id, env_name)
+    except Exception:
+        return []
+    if data.get("error") or not data.get("traces"):
+        return []
+
+    traces = sorted(data["traces"], key=lambda t: t.get("timestamp") or "0")
+    if turn_count:
+        traces = traces[:turn_count]
+
+    out = []
+    for i, trace in enumerate(traces):
+        agent_calls = [
+            {
+                "name": s.get("name"),
+                "type": s.get("span_type"),
+                "durationMs": s.get("duration_ms"),
+                "depth": s.get("depth", 0),
+            }
+            for s in trace.get("spans", [])
+            if (s.get("span_type") or "").upper() in ("AGENT", "TOOL")
+        ]
+        out.append({
+            "turnNo": i + 1,
+            "traceId": trace.get("trace_id"),
+            "responseTimeMs": trace.get("total_duration_ms"),
+            "agentCalls": agent_calls,
+        })
+    return out
+
+def build_turn_traces(actual_turns: list[dict], mlflow_turns: list[dict]) -> list[dict]:
+    """Pair up a run's (user, assistant) turns with MLflow's per-turn agent/tool
+    summaries into the shape stored in turn_traces_json. Shared by the live run path
+    (core/tester.py) and the backfill endpoint (re-deriving it later for an older run
+    from its stored conversation_id)."""
+    assistant_turns = [t for t in actual_turns if t.get("role") == "assistant"]
+    user_turns = [t for t in actual_turns if t.get("role") == "user"]
+    turn_traces = []
+    for idx, assistant_turn in enumerate(assistant_turns):
+        mlflow_data = mlflow_turns[idx] if idx < len(mlflow_turns) else {}
+        turn_traces.append({
+            "turnNo": idx + 1,
+            "userInput": user_turns[idx]["content"] if idx < len(user_turns) else "",
+            "agentResponse": assistant_turn.get("content", ""),
+            "responseTimeMs": assistant_turn.get("latencyMs"),
+            "traceId": mlflow_data.get("traceId"),
+            "agentCalls": mlflow_data.get("agentCalls", []),
+        })
+    return turn_traces

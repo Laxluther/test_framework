@@ -124,11 +124,21 @@
           </div>
           <div class="form-group flex-1 flex-row">
             <button id="single-run-btn" class="btn btn-primary flex-1">Run Test</button>
+            <button id="single-queue-btn" class="btn btn-secondary" style="margin-left: 8px;" title="Line this conversation up to run automatically after the current run finishes">+ Queue</button>
             <button id="single-stop-btn" class="btn btn-danger flex-1 hidden" style="margin-left: 8px;">Stop</button>
           </div>
         </div>
       </div>
-      
+
+      <div id="single-queue-panel" class="card" style="margin-top: 12px; padding: 12px 16px;">
+        <div class="card-header" style="padding: 0 0 8px 0;">
+          <span class="card-title">Queued Runs</span>
+        </div>
+        <div id="single-queue-list" class="single-queue-list">
+          <p class="text-muted text-sm">No queued runs. Pick a conversation and rounds above, then click "+ Queue" to line up the next run.</p>
+        </div>
+      </div>
+
       <div class="execution-area">
         <div class="log-container card">
           <div class="card-header">
@@ -190,20 +200,8 @@
         </div>
       </div>
       
-      <div class="batch-split-layout">
-        <div class="batch-left">
-          <div class="section-title">Live Progress</div>
-          <div id="batch-live-grid">
-            <!-- Grid items injected via JS -->
-          </div>
-        </div>
-        <div class="batch-right">
-          <div class="section-title">Round Summaries</div>
-          <div id="batch-round-summaries" class="round-summaries-list">
-            <!-- Summaries injected via JS -->
-          </div>
-        </div>
-      </div>
+      <div class="section-title">Live Progress</div>
+      <div id="batch-live-grid"></div>
     </section>
     
     <!-- PAGE: RESULTS -->
@@ -211,13 +209,14 @@
 
       
       <div class="results-container">
-        <div class="section-title mt-4">Batch Sessions</div>
         <div class="table-wrapper">
           <table class="data-table">
             <thead>
               <tr>
                 <th>Session ID</th>
                 <th>Date / Time</th>
+                <th>Type</th>
+                <th>Application</th>
                 <th>Environment</th>
                 <th>Rounds</th>
                 <th>Grade Accuracy</th>
@@ -225,25 +224,7 @@
                 <th>Notes</th>
               </tr>
             </thead>
-            <tbody id="results-batch-tbody">
-              <!-- Injected via JS -->
-            </tbody>
-          </table>
-        </div>
-        
-        <div class="section-title mt-8">Single Sessions</div>
-        <div class="table-wrapper">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Session ID</th>
-                <th>Date / Time</th>
-                <th>Application</th>
-                <th>Environment</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="results-single-tbody">
+            <tbody id="results-sessions-tbody">
               <!-- Injected via JS -->
             </tbody>
           </table>
@@ -261,42 +242,12 @@
           <div id="ov-stat-total-runs" class="stat-card-value">—</div>
         </div>
         <div class="stat-card">
-          <div class="stat-card-label">Latest Pass Rate</div>
-          <div id="ov-stat-latest-pass" class="stat-card-value">—</div>
-        </div>
-        <div class="stat-card">
           <div class="stat-card-label">Avg Assumption Score</div>
           <div id="ov-stat-assumption" class="stat-card-value">—</div>
         </div>
         <div class="stat-card">
           <div class="stat-card-label">Avg Response Time</div>
           <div id="ov-stat-latency" class="stat-card-value">—</div>
-        </div>
-      </div>
-
-      <div class="card mb-4">
-        <div class="card-header"><span class="card-title">Pass Rate Trend (Recent Runs)</span></div>
-        <div class="card-body">
-          <div id="ov-trend-chart" class="bar-chart"></div>
-        </div>
-      </div>
-
-      <div class="card mb-4">
-        <div class="card-header"><span class="card-title">Recent Runs</span></div>
-        <div class="table-wrapper" style="border:none;">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Session ID</th>
-                <th>Date / Time</th>
-                <th>Environment</th>
-                <th>Grade Accuracy</th>
-                <th>Avg Assumption</th>
-                <th>Avg Response Time</th>
-              </tr>
-            </thead>
-            <tbody id="ov-recent-runs-tbody"></tbody>
-          </table>
         </div>
       </div>
 
@@ -312,28 +263,14 @@
           <div class="form-group align-bottom">
             <button id="dashboard-load-btn" class="btn btn-secondary">Load Dashboard</button>
           </div>
-        </div>
-      </div>
-
-      <div id="dashboard-content" class="hidden">
-        <div class="dashboard-stats-grid mb-4">
-          <div class="stat-card">
-            <div class="stat-card-label">Total Conversations</div>
-            <div id="dash-stat-total" class="stat-card-value">—</div>
+          <div class="form-group align-bottom" style="margin-left: auto;">
+            <div class="summary-pills">
+              <span class="summary-pill"><span class="summary-pill-label">Conversations</span><strong id="dash-stat-total">—</strong></span>
+              <span class="summary-pill"><span class="summary-pill-label">Accuracy</span><strong id="dash-stat-acc">—</strong></span>
+              <span class="summary-pill"><span class="summary-pill-label">Assumption</span><strong id="dash-stat-score">—</strong></span>
+            </div>
           </div>
-          <div class="stat-card">
-            <div class="stat-card-label">Overall Accuracy</div>
-            <div id="dash-stat-acc" class="stat-card-value">—</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card-label">Avg Assumption Score</div>
-            <div id="dash-stat-score" class="stat-card-value">—</div>
-          </div>
-        </div>
-
-        <div class="card mb-4 rounds-filter-card">
-          <div class="rounds-filter-row">
-            <span class="form-label">Rounds included</span>
+          <div class="form-group align-bottom">
             <div class="rounds-stepper">
               <button id="dash-rounds-minus" class="btn btn-secondary btn-xs" title="Show fewer rounds">−</button>
               <span id="dash-rounds-display" class="rounds-stepper-value">round 1 – 1 of 1</span>
@@ -341,37 +278,34 @@
             </div>
           </div>
         </div>
+      </div>
 
-        <div class="card mb-4">
-          <div class="card-header">Result Heatmap</div>
-          <div class="card-body overflow-auto">
-            <div id="dashboard-heatmap"></div>
+      <div id="dashboard-content" class="hidden batch-split-layout">
+        <div class="batch-left">
+          <div class="card mb-4">
+            <div class="card-header">Result Heatmap</div>
+            <div class="card-body overflow-auto">
+              <div id="dashboard-heatmap"></div>
+            </div>
+          </div>
+
+          <div class="card mb-4">
+            <div class="card-header">Performance Charts</div>
+            <div class="card-body">
+              <div id="dashboard-charts" class="dashboard-charts-container"></div>
+            </div>
           </div>
         </div>
 
-        <div class="card mb-4">
-          <div class="card-header" style="display:flex; align-items:center; gap:10px;">
-            <span class="card-title">Flakiness</span>
-            <span class="text-muted text-sm">Conversations that pass some rounds and fail others</span>
-          </div>
-          <div class="card-body">
-            <div id="dashboard-flakiness"></div>
-          </div>
-        </div>
-
-        <div class="card mb-4">
-          <div class="card-header">
-            <span class="card-title">Failure Breakdown</span>
-          </div>
-          <div class="card-body">
-            <div id="dashboard-failure-clusters" class="bar-chart"></div>
-          </div>
-        </div>
-
-        <div class="card mb-4">
-          <div class="card-header">Performance Charts</div>
-          <div class="card-body">
-            <div id="dashboard-charts" class="dashboard-charts-container"></div>
+        <div class="batch-right">
+          <div class="card mb-4 app-accuracy-panel">
+            <div class="card-header">
+              <span class="card-title">Application Accuracy</span>
+              <span class="text-muted text-sm">Pass rate per app, across the rounds shown</span>
+            </div>
+            <div class="card-body">
+              <div id="dashboard-app-accuracy"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -439,6 +373,7 @@
             <tr>
               <th>Session ID</th>
               <th>Date / Time</th>
+              <th>Type</th>
               <th>Environment</th>
               <th>Rounds</th>
               <th>Conversations</th>
@@ -466,16 +401,23 @@
           </div>
           <div class="form-group align-bottom">
             <button id="trace-fetch-btn" class="btn btn-primary">Fetch Traces</button>
+            <button id="trace-backfill-btn" class="btn btn-secondary" style="margin-left: 8px;" title="Save this conversation's per-turn agent/tool timing to its stored result, so it shows up in a regenerated report">Save Timing to Report</button>
           </div>
         </div>
+        <div id="trace-backfill-status" class="text-muted text-sm mt-2"></div>
       </div>
-      
+
       <div id="trace-results-area" class="hidden">
         <div class="section-title mb-2">Execution Timeline</div>
         <div class="text-muted text-sm mb-4" id="trace-meta-info"></div>
         <div id="trace-spans-list" class="trace-list">
           <!-- Injected via JS -->
         </div>
+      </div>
+
+      <div id="trace-turn-timing-area" class="hidden mt-4">
+        <div class="section-title mb-2">Saved Turn Timing (from report data)</div>
+        <div id="trace-turn-timing-list"></div>
       </div>
     </section>
 

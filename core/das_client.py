@@ -45,13 +45,17 @@ async def das_end(conversation_id: str, user_email: str, industry: str, api_url:
         except Exception:
             pass
 
-async def check_api_health(api_url: str) -> bool:
+async def check_api_health(api_url: str, api_key: str = "") -> bool:
+    """Reachability check, not a correctness check: any HTTP response (even a 4xx/5xx
+    from hitting a POST-only route with GET) proves DNS/TLS/connection all worked, so
+    only a network-level failure (timeout, connection refused, DNS) counts as unreachable.
+    A status-code whitelist here previously caused false 'unable to reach' reports for
+    environments that responded with a code not on the list (e.g. 403/404 from the
+    API gateway) despite being fully reachable."""
+    headers = {"Ocp-Apim-Subscription-Key": api_key} if api_key else {}
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(api_url)
-            # 400 means endpoint is up but requires POST body
-            if resp.status_code in [200, 400, 401]: 
-                return True
-            return False
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.get(api_url, headers=headers)
+            return True
     except httpx.RequestError:
         return False
