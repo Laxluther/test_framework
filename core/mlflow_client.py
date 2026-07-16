@@ -122,16 +122,27 @@ def summarize_turn_traces(conversation_id: str, env_name: str = "Local", turn_co
 
     out = []
     for i, trace in enumerate(traces):
-        agent_calls = [
-            {
+        agent_calls = []
+        for s in trace.get("spans", []):
+            if (s.get("span_type") or "").upper() not in ("AGENT", "TOOL"):
+                continue
+            status = s.get("status") or "UNSET"
+            outputs = s.get("outputs") or ""
+            # "Succeeded" here means both: MLflow didn't record an error status, AND the
+            # call actually produced output — a tool that returns cleanly but with an
+            # empty result is still a failure from the test's point of view (that's the
+            # whole point of this as a micro-eval: catch silent internal-tool failures).
+            succeeded = status in ("OK", "UNSET") and bool(outputs.strip())
+            agent_calls.append({
                 "name": s.get("name"),
                 "type": s.get("span_type"),
                 "durationMs": s.get("duration_ms"),
                 "depth": s.get("depth", 0),
-            }
-            for s in trace.get("spans", [])
-            if (s.get("span_type") or "").upper() in ("AGENT", "TOOL")
-        ]
+                "status": status,
+                "succeeded": succeeded,
+                "inputs": s.get("inputs") or "",
+                "outputs": outputs,
+            })
         out.append({
             "turnNo": i + 1,
             "traceId": trace.get("trace_id"),

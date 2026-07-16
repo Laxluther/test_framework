@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, Response, send_file
 
-from main import run_single_test_async, run_all_tests_async, list_available_conversations
+from main import run_single_test_async, run_all_tests_async, list_available_conversations, retry_single_result_async
 from core.config import DAS_ENVIRONMENTS, DAS_API_KEYS
 from core.das_client import check_api_health
 from core.db import (get_past_runs, get_test_results_for_batch, get_single_result_detail,
@@ -165,6 +165,20 @@ def run_test_in_thread(mode, **kwargs):
                         cancel_flag=run_state["cancel_flag"],
                     )
                 )
+            elif mode == "retry-single":
+                loop.run_until_complete(
+                    retry_single_result_async(
+                        result_id=kwargs["result_id"],
+                        use_llm_eval=kwargs["use_llm_eval"],
+                        on_progress=progress_callback,
+                        cancel_flag=run_state["cancel_flag"],
+                    )
+                )
+                run_state["progress_queue"].put({
+                    "event": "run_complete",
+                    "data": {"result_id": kwargs["result_id"]}
+                })
+                return
             else:
                 result_dir = loop.run_until_complete(
                     run_all_tests_async(
@@ -290,6 +304,24 @@ def api_result_single_detail(result_id):
         return jsonify({"error": "Not found"}), 404
     return jsonify(result)
 
+@app.route("/api/results/retry/<int:result_id>", methods=["POST"])
+def api_retry_result(result_id):
+    """Retry one specific stored result — re-runs that exact conversation+environment
+    and overwrites this same row with the fresh outcome, unlike the batch-level
+    'retry failed' which spins up a whole new linked session."""
+    if run_state["running"]:
+        return jsonify({"error": "A test is already running"}), 409
+    if not get_single_result_detail(result_id):
+        return jsonify({"error": "Result not found"}), 404
+
+    body = request.json or {}
+    run_test_in_thread(
+        mode="retry-single",
+        result_id=result_id,
+        use_llm_eval=body.get("use_llm_eval", True),
+    )
+    return jsonify({"status": "started", "result_id": result_id})
+
 @app.route("/api/results/override", methods=["POST"])
 def api_results_override():
     body = request.json
@@ -365,6 +397,37 @@ def api_mlflow_backfill(conversation_id):
     turn_traces = build_turn_traces(actual_turns, mlflow_turns)
     update_test_result_turn_traces(result["id"], turn_traces)
     return jsonify({"status": "updated", "resultId": result["id"], "turnTraces": turn_traces})
+
+@app.route("/api/mlflow/backfill-session/<int:session_id>", methods=["POST"])
+def api_mlflow_backfill_session(session_id):
+    """Same backfill as api_mlflow_backfill, but for every result in a session in one
+    request — so an old multi-conversation run doesn't need opening each conversation
+    individually and clicking Save Timing to Report one at a time."""
+    env_override = request.args.get("env")
+    results = get_test_results_for_batch(session_id)
+    if not results:
+        return jsonify({"error": "No results found for this session"}), 404
+
+    updated, skipped = 0, 0
+    for r in results:
+        conv_id = r.get("conversation_id")
+        actual_turns = json.loads(r["actual_turns_json"]) if r.get("actual_turns_json") else []
+        assistant_turn_count = sum(1 for t in actual_turns if t.get("role") == "assistant")
+        if not conv_id or not assistant_turn_count:
+            skipped += 1
+            continue
+
+        env = env_override or r.get("das_env") or "Local"
+        mlflow_turns = summarize_turn_traces(conv_id, env, assistant_turn_count)
+        if not mlflow_turns:
+            skipped += 1
+            continue
+
+        turn_traces = build_turn_traces(actual_turns, mlflow_turns)
+        update_test_result_turn_traces(r["id"], turn_traces)
+        updated += 1
+
+    return jsonify({"status": "done", "updated": updated, "skipped": skipped, "total": len(results)})
 
 @app.route("/api/report/<int:session_id>")
 def api_download_report(session_id):

@@ -71,6 +71,7 @@
   const ICON_MESSAGE = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
   const ICON_COPY = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
   const ICON_UPLOAD = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+  const ICON_RETRY = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>';
 
   function copyToClipboard(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1149,6 +1150,28 @@
       });
       body.appendChild(retryBtn);
 
+      const backfillSessionBtn = document.createElement('button');
+      backfillSessionBtn.className = 'btn btn-secondary btn-sm mb-4';
+      backfillSessionBtn.style.marginLeft = '8px';
+      backfillSessionBtn.style.display = 'inline-flex';
+      backfillSessionBtn.style.alignItems = 'center';
+      backfillSessionBtn.style.gap = '8px';
+      backfillSessionBtn.title = 'Fetch and save MLflow turn timing for every conversation in this session in one go, instead of opening each one individually';
+      backfillSessionBtn.innerHTML = ICON_UPLOAD + ' Backfill Session Timing';
+      backfillSessionBtn.addEventListener('click', async () => {
+        backfillSessionBtn.disabled = true;
+        backfillSessionBtn.innerHTML = '<span class="spinner"></span> Backfilling…';
+        try {
+          const envParam = (sessionMeta && sessionMeta.das_env) || 'Local';
+          const data = await api('/api/mlflow/backfill-session/' + sessionId + '?env=' + encodeURIComponent(envParam), { method: 'POST' });
+          showToast('Backfilled ' + data.updated + '/' + data.total + ' conversation(s)' + (data.skipped ? ' (' + data.skipped + ' had no trace data)' : ''), data.updated > 0 ? 'success' : 'error');
+        } catch { } finally {
+          backfillSessionBtn.disabled = false;
+          backfillSessionBtn.innerHTML = ICON_UPLOAD + ' Backfill Session Timing';
+        }
+      });
+      body.appendChild(backfillSessionBtn);
+
       const wrapper = document.createElement('div');
       wrapper.className = 'table-wrapper';
       const table = document.createElement('table');
@@ -1380,6 +1403,65 @@
     fadePanelBody();
   }
 
+  /* Re-run one stored result's exact conversation+environment and overwrite that
+     same row in place — separate from the batch-level "retry failed" flow, which
+     spins up a whole new linked session instead of touching the original. */
+  async function retryThisResult(resultId, btn) {
+    if (state.isRunning) { showToast('A test is already running', 'error'); return; }
+    const resetBtn = () => { btn.disabled = false; btn.innerHTML = ICON_RETRY + ' Retry This Conversation'; };
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;margin-right:6px;display:inline-block"></span>Retrying...';
+    state.isRunning = true;
+
+    try {
+      await api('/api/results/retry/' + resultId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+    } catch {
+      state.isRunning = false;
+      resetBtn();
+      return;
+    }
+
+    connectSSE({
+      completed(d) {
+        showToast((d.success ? 'PASS' : 'FAIL') + ' — retry complete for ' + (d.application || ''), d.success ? 'success' : 'error');
+      },
+      async run_complete() {
+        closeSSE();
+        state.isRunning = false;
+        let fresh;
+        try {
+          fresh = await api('/api/results/detail/' + resultId);
+        } catch {
+          resetBtn();
+          return;
+        }
+        // Keep the session table / prev-next nav in sync so "Back to Session" and
+        // switching to another conversation don't show the pre-retry outcome.
+        const ctx = state.sessionDrilldownContext;
+        if (ctx && ctx.currentIndex != null && ctx.results[ctx.currentIndex] && ctx.results[ctx.currentIndex].id === resultId) {
+          Object.assign(ctx.results[ctx.currentIndex], {
+            grades_passed: fresh.grades_passed,
+            assumptions_score: fresh.assumptions_score,
+            flow_completed: fresh.flow_completed,
+            application_name: fresh.application_name,
+          });
+        }
+        renderDrillDownPanel(fresh);
+      },
+      error(d) {
+        closeSSE();
+        state.isRunning = false;
+        showToast(d.message || 'Retry failed', 'error');
+        resetBtn();
+      },
+    });
+  }
+
   function renderDrillDownPanel(data) {
     const panel = el('detail-panel');
     const body = el('detail-panel-body');
@@ -1392,7 +1474,10 @@
     /* Overview Section */
     const overview = document.createElement('div');
     overview.className = 'detail-section';
-    overview.innerHTML = '<div class="detail-section-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Overview</div>';
+    overview.innerHTML = '<div class="detail-section-title" style="display:flex;justify-content:space-between;align-items:center;">' +
+      '<div><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Overview</div>' +
+      '<button id="drill-retry-btn" class="btn btn-xs btn-secondary" title="Re-run this exact conversation and overwrite this result with the fresh outcome">' + ICON_RETRY + ' Retry This Conversation</button>' +
+      '</div>';
     const grid = document.createElement('div');
     grid.className = 'detail-grid';
     const fields = [
@@ -1569,6 +1654,11 @@
         turnList.innerHTML = '<pre style="background:var(--bg-app); padding:10px; border-radius:4px; font-size:12px; overflow-x:auto;">' + escapeHtml(JSON.stringify(turns, null, 2)) + '</pre>';
         jsonBtn.style.display = 'none';
       });
+    }
+
+    const retryBtn = el('drill-retry-btn');
+    if (retryBtn) {
+      retryBtn.addEventListener('click', () => retryThisResult(data.id, retryBtn));
     }
 
     /* Turn Timing Section — already-saved per-turn agent/tool breakdown, if any */
@@ -1768,6 +1858,44 @@
   /* Per-turn agent/tool timing breakdown — the data saved to turn_traces_json and
      exported as the timing_round{N} report sheet. Reused in the Traces tab and the
      result drill-down. */
+  /* One agent/tool call inside a turn — a green/red dot flags whether it actually
+     produced output (not just whether MLflow recorded an error status), and if
+     there's input/output captured, clicking expands it. This is the "micro eval"
+     view for catching silent internal-tool failures that still let the turn as a
+     whole complete normally. */
+  function buildTurnCallPill(c) {
+    const hasIO = !!((c.inputs && c.inputs.trim()) || (c.outputs && c.outputs.trim()));
+    const failed = c.succeeded === false;
+    const wrap = document.createElement('div');
+    wrap.className = 'turn-timing-call' + (hasIO ? ' has-io' : '');
+
+    const pill = document.createElement('span');
+    pill.className = 'turn-timing-pill ' + spanTypeClass(c.type) + (failed ? ' call-failed' : '');
+    pill.innerHTML =
+      '<span class="turn-timing-status-dot ' + (failed ? 'fail' : 'ok') + '" title="' + (failed ? 'No output produced' : 'Produced output') + '"></span>' +
+      '<span>' + escapeHtml(c.name || '') + ' &middot; ' + (c.durationMs != null ? formatLatency(c.durationMs) : '—') + '</span>' +
+      (hasIO ? '<span class="turn-timing-io-toggle">' + ICON_CHEVRON_RIGHT + '</span>' : '');
+    wrap.appendChild(pill);
+
+    if (hasIO) {
+      const ioPanel = document.createElement('div');
+      ioPanel.className = 'turn-timing-io-panel';
+      ioPanel.innerHTML =
+        (c.inputs ? '<div class="span-io-block"><div class="span-io-label">Input</div><pre class="span-io-content"></pre></div>' : '') +
+        (c.outputs ? '<div class="span-io-block"><div class="span-io-label">Output</div><pre class="span-io-content"></pre></div>' : '<div class="text-muted text-sm">No output produced.</div>');
+      const contentEls = ioPanel.querySelectorAll('.span-io-content');
+      let ci = 0;
+      if (c.inputs) contentEls[ci++].textContent = c.inputs;
+      if (c.outputs) contentEls[ci++].textContent = c.outputs;
+      wrap.appendChild(ioPanel);
+      pill.addEventListener('click', () => {
+        wrap.classList.toggle('io-open');
+        wrap.querySelector('.turn-timing-io-toggle').classList.toggle('expanded');
+      });
+    }
+    return wrap;
+  }
+
   function renderTurnTimingTable(turnTraces, container) {
     if (!turnTraces || turnTraces.length === 0) {
       container.innerHTML = '<p class="text-muted text-sm">No turn timing data saved for this conversation yet.</p>';
@@ -1777,16 +1905,22 @@
     turnTraces.forEach(turn => {
       const row = document.createElement('div');
       row.className = 'turn-timing-row';
-      const calls = (turn.agentCalls || []).map(c =>
-        '<span class="turn-timing-pill ' + spanTypeClass(c.type) + '">' + escapeHtml(c.name || '') + ' &middot; ' + (c.durationMs != null ? formatLatency(c.durationMs) : '—') + '</span>'
-      ).join('');
       row.innerHTML =
         '<div class="turn-timing-header">' +
         '<span class="turn-timing-no">Turn ' + (turn.turnNo != null ? turn.turnNo : '—') + '</span>' +
         '<span class="turn-timing-input" title="' + escapeHtml(turn.userInput || '') + '">' + escapeHtml(turn.userInput || '') + '</span>' +
         '<span class="turn-timing-latency">' + (turn.responseTimeMs != null ? formatLatency(turn.responseTimeMs) : '—') + '</span>' +
-        '</div>' +
-        (calls ? '<div class="turn-timing-calls">' + calls + '</div>' : '<div class="text-muted text-sm">No agent/tool breakdown captured for this turn.</div>');
+        '</div>';
+
+      const calls = turn.agentCalls || [];
+      if (calls.length === 0) {
+        row.innerHTML += '<div class="text-muted text-sm">No agent/tool breakdown captured for this turn.</div>';
+      } else {
+        const callsWrap = document.createElement('div');
+        callsWrap.className = 'turn-timing-calls';
+        calls.forEach(c => callsWrap.appendChild(buildTurnCallPill(c)));
+        row.appendChild(callsWrap);
+      }
       container.appendChild(row);
     });
   }

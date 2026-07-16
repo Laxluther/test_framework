@@ -6,7 +6,8 @@ from core.config import CONVERSATION_FOLDER, DEFAULT_GRADES_FILE, DEFAULT_ASSUMP
 from core.loader import collect_test_files, extract_conversation_no, load_conversation_json, load_all_ground_truth
 from core.tester import run_test
 from core.reporter import generate_report
-from core.db import create_batch_run, update_batch_run_metrics, insert_test_result, update_batch_run_notes
+from core.db import (create_batch_run, update_batch_run_metrics, insert_test_result,
+                     update_batch_run_notes, get_single_result_detail, update_test_result_full)
 from test_agents import simulator_agent, grade_evaluator_agent, assumption_evaluator_agent
 
 async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: bool, das_env: str, on_progress=None, cancel_flag=None):
@@ -97,6 +98,88 @@ async def run_single_test_async(conv_file: Path, num_rounds: int, use_llm_eval: 
     update_batch_run_metrics(batch_id)
     generate_report(out_dir, out_dir / "consolidated_report.xlsx")
     return out_dir
+
+async def retry_single_result_async(result_id: int, use_llm_eval: bool = True, on_progress=None, cancel_flag=None):
+    """Re-run the exact conversation+environment behind one stored result, and
+    overwrite that same row with the fresh outcome — unlike the batch-level 'retry
+    failed' (which spins up a whole new linked session), this updates the one result
+    you're looking at in place, since that's what retrying a single conversation from
+    its own detail view should mean."""
+    existing = get_single_result_detail(result_id)
+    if not existing:
+        raise ValueError(f"No stored result found for id {result_id}")
+
+    conv_no = existing["conversation_no"]
+    das_env = existing["das_env"] or "Local"
+    api_url = DAS_ENVIRONMENTS.get(das_env, DAS_ENVIRONMENTS["Local"])
+    api_key = DAS_API_KEYS.get(das_env, "")
+
+    conv_file = next((f for f in collect_test_files(CONVERSATION_FOLDER) if extract_conversation_no(f.name) == conv_no), None)
+    if conv_file is None:
+        raise ValueError(f"Conversation #{conv_no} not found in {CONVERSATION_FOLDER} — can't retry")
+
+    gt = load_all_ground_truth(DEFAULT_GRADES_FILE, DEFAULT_ASSUMPTIONS_FILE)
+    reference = load_conversation_json(conv_file)
+    reference["filename"] = conv_file.name
+    expected_grades = gt["grades"].get(conv_no, {}).get("expectedGrades", [])
+    expected_ctqs = gt["assumptions"].get(conv_no, {}).get("expectedCTQs", [])
+
+    if on_progress:
+        on_progress("round_start", {"round": existing["round_no"] or 1, "total_rounds": 1})
+        on_progress("file_start", {"conv_no": conv_no, "conv_file": conv_file.name, "index": 1, "total": 1})
+
+    result = await run_test(
+        conv_no=conv_no,
+        reference=reference,
+        expected_grades=expected_grades,
+        expected_ctqs=expected_ctqs,
+        simulator_agent=simulator_agent,
+        grade_evaluator_agent=grade_evaluator_agent,
+        assumption_evaluator_agent=assumption_evaluator_agent,
+        api_url=api_url,
+        api_key=api_key,
+        use_llm_eval=use_llm_eval,
+        on_progress=on_progress,
+        das_env=das_env,
+    )
+
+    g_eval = result.get("gradeEvaluation", {})
+    a_eval = result.get("assumptionEvaluation", {})
+    update_test_result_full(
+        result_id,
+        conversation_id=result.get("conversationId", ""),
+        conversation_no=result.get("conversationNo", conv_no),
+        application_name=result.get("application", ""),
+        expected_grades=result.get("expectedGrades", []),
+        suggested_grades=[g.get("gradeName", str(g)) if isinstance(g, dict) else str(g) for g in result.get("suggestedGrades", [])],
+        grades_matched_count=g_eval.get("totalMatched", 0),
+        grades_passed=g_eval.get("passed"),
+        assumptions_score=a_eval.get("overallScore"),
+        assumptions_passed=a_eval.get("passed"),
+        flow_completed=result.get("flowCompleted", False),
+        error_message=result.get("error", ""),
+        expected_assumptions=expected_ctqs,
+        agent_assumptions=result.get("agentAssumptionOutput", ""),
+        actual_turns_json=json.dumps(result.get("actualTurns", [])),
+        grade_eval_details=json.dumps(result.get("gradeEvaluation", {})),
+        assumption_eval_details=json.dumps(result.get("assumptionEvaluation", {})),
+        turn_traces_json=json.dumps(result.get("turnTraces", [])),
+        total_duration_ms=result.get("timing", {}).get("totalDurationMs"),
+        avg_turn_latency_ms=result.get("timing", {}).get("avgTurnLatencyMs"),
+        grade_eval_ms=result.get("timing", {}).get("gradeEvalMs"),
+        assumption_eval_ms=result.get("timing", {}).get("assumptionEvalMs"),
+        simulator_tokens=result.get("usage", {}).get("simulatorTokens"),
+        grade_eval_tokens=result.get("usage", {}).get("gradeEvalTokens"),
+        assumption_eval_tokens=result.get("usage", {}).get("assumptionEvalTokens"),
+        total_tokens=result.get("usage", {}).get("totalTokens"),
+    )
+
+    if existing.get("batch_id"):
+        update_batch_run_metrics(existing["batch_id"])
+
+    # run_test() above already emits its own "completed" progress event — an extra
+    # one here would double-fire the frontend's completion toast/handler.
+    return result_id
 
 async def run_all_tests_async(num_rounds: int, use_llm_eval: bool, das_env: str, on_progress=None, cancel_flag=None, execution_mode: str = "sequential", conv_no_filter: list[int] = None, notes: str = None):
     api_url = DAS_ENVIRONMENTS.get(das_env, DAS_ENVIRONMENTS["Local"])

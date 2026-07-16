@@ -29,8 +29,8 @@ ASSUMPTION_WIDTHS = [5, 28, 10, 10, 9, 9, 38, 55, 38, 35, 38, 55, 45, 12, 55]
 
 OVERVIEW_SUMMARY_HEADERS = ["PASS", "FAIL", "Score", ">80%", ">70%", ">60%"]
 
-TIMING_HEADERS = ["No.", "Application", "Turn", "User Input", "Response Time (ms)", "Agent / Tool", "Type", "Call Duration (ms)"]
-TIMING_WIDTHS = [6, 22, 7, 45, 16, 30, 10, 16]
+TIMING_HEADERS = ["No.", "Application", "Turn", "User Input", "Response Time (ms)", "Agent / Tool", "Type", "Call Duration (ms)", "Succeeded", "Tool Input", "Tool Output"]
+TIMING_WIDTHS = [6, 22, 7, 45, 16, 30, 10, 16, 11, 45, 45]
 
 def _pass_fill(passed: bool | None) -> PatternFill:
     if passed is None: return PatternFill(fill_type=None)
@@ -155,7 +155,7 @@ def build_timing_sheet(ws, results: list[dict]):
     _set_col_widths(ws, TIMING_WIDTHS)
     _hdr(ws, TIMING_HEADERS, 1, GREY_HDR)
 
-    def _write_row(r_idx, row_data):
+    def _write_row(r_idx, row_data, succeeded=None):
         for c_idx, val in enumerate(row_data, 1):
             cell = ws.cell(row=r_idx, column=c_idx, value=val)
             cell.font = CELL_FONT
@@ -163,6 +163,8 @@ def build_timing_sheet(ws, results: list[dict]):
             cell.border = THIN
             if c_idx % 2 == 0:
                 cell.fill = ALT_ROW
+            if TIMING_HEADERS[c_idx - 1] == "Succeeded" and succeeded is not None:
+                cell.fill = _pass_fill(succeeded)
 
     r_idx = 2
     round_total_ms = 0.0
@@ -180,7 +182,7 @@ def build_timing_sheet(ws, results: list[dict]):
             round_total_count += 1
 
         if not turn_traces:
-            _write_row(r_idx, [conv_no, app_name, "", "(no turn trace data captured for this run)", "", "", "", ""])
+            _write_row(r_idx, [conv_no, app_name, "", "(no turn trace data captured for this run)", "", "", "", "", "", "", ""])
             r_idx += 1
             continue
 
@@ -190,14 +192,17 @@ def build_timing_sheet(ws, results: list[dict]):
                 turn_latencies.append(response_ms)
             agent_calls = turn.get("agentCalls") or []
             if not agent_calls:
-                _write_row(r_idx, [conv_no, app_name, turn.get("turnNo", ""), turn.get("userInput", ""), _fmt_ms(response_ms), "", "", ""])
+                _write_row(r_idx, [conv_no, app_name, turn.get("turnNo", ""), turn.get("userInput", ""), _fmt_ms(response_ms), "", "", "", "", "", ""])
                 r_idx += 1
             else:
                 for call in agent_calls:
+                    succeeded = call.get("succeeded")
                     _write_row(r_idx, [
                         conv_no, app_name, turn.get("turnNo", ""), turn.get("userInput", ""), _fmt_ms(response_ms),
                         call.get("name", ""), call.get("type", ""), _fmt_ms(call.get("durationMs")),
-                    ])
+                        ("Yes" if succeeded else "No") if succeeded is not None else "",
+                        call.get("inputs", ""), call.get("outputs", ""),
+                    ], succeeded=succeeded)
                     r_idx += 1
 
     r_idx += 1

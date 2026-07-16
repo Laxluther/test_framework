@@ -232,6 +232,49 @@ def insert_test_result(
     conn.close()
     return row_id
 
+def update_test_result_full(result_id: int, **fields) -> bool:
+    """Overwrite an existing test_results row in place with a fresh run's outcome —
+    used by 'retry this conversation' in the drilldown, so retrying updates the same
+    row instead of insert_test_result's usual behavior of always creating a new one.
+    Accepts the same field names as insert_test_result (minus batch_id/round_no, which
+    don't change on retry); list/dict fields must already be JSON-encoded strings."""
+    column_types = {
+        "conversation_id": "raw", "conversation_no": "raw", "application_name": "raw",
+        "expected_grades": "json", "suggested_grades": "json",
+        "grades_matched_count": "raw", "grades_passed": "bool", "assumptions_score": "raw",
+        "assumptions_passed": "bool", "flow_completed": "bool", "error_message": "raw",
+        "expected_assumptions": "json", "agent_assumptions": "raw",
+        "actual_turns_json": "raw", "grade_eval_details": "raw", "assumption_eval_details": "raw",
+        "turn_traces_json": "raw", "total_duration_ms": "raw", "avg_turn_latency_ms": "raw",
+        "grade_eval_ms": "raw", "assumption_eval_ms": "raw", "simulator_tokens": "raw",
+        "grade_eval_tokens": "raw", "assumption_eval_tokens": "raw", "total_tokens": "raw",
+    }
+    set_clauses = []
+    values = []
+    for name, kind in column_types.items():
+        if name not in fields:
+            continue
+        val = fields[name]
+        if kind == "json":
+            val = json.dumps(val if val is not None else [])
+        elif kind == "bool":
+            val = 1 if val else (0 if val is False else None)
+        set_clauses.append(f"{name} = ?")
+        values.append(val)
+    if not set_clauses:
+        return False
+
+    set_clauses.append("timestamp = CURRENT_TIMESTAMP")
+    values.append(result_id)
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE test_results SET {', '.join(set_clauses)} WHERE id = ?", values)
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
+
 def get_past_runs() -> List[Dict[str, Any]]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
