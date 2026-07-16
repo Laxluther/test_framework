@@ -1588,6 +1588,10 @@ tr.inline-edit-row td { background: var(--bg-active); }
 .match-indicator.matched { color: var(--success); }
 .match-indicator.unmatched { color: var(--danger); }
 
+/* --- Timing-saved indicator (session results table) --- */
+.timing-indicator { display: inline-flex; color: var(--border-color); }
+.timing-indicator.has-timing { color: var(--accent); }
+
 /* --- Scrollbar Customization --- */
 ::-webkit-scrollbar {
   width: 8px;

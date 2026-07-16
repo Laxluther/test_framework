@@ -1165,6 +1165,9 @@
           const envParam = (sessionMeta && sessionMeta.das_env) || 'Local';
           const data = await api('/api/mlflow/backfill-session/' + sessionId + '?env=' + encodeURIComponent(envParam), { method: 'POST' });
           showToast('Backfilled ' + data.updated + '/' + data.total + ' conversation(s)' + (data.skipped ? ' (' + data.skipped + ' had no trace data)' : ''), data.updated > 0 ? 'success' : 'error');
+          // Refresh the table in place so the Timing column reflects what just changed —
+          // otherwise a toast is the only feedback and you'd have to open every row to see.
+          if (data.updated > 0) await openSessionDetail(sessionId);
         } catch { } finally {
           backfillSessionBtn.disabled = false;
           backfillSessionBtn.innerHTML = ICON_UPLOAD + ' Backfill Session Timing';
@@ -1177,18 +1180,20 @@
       const table = document.createElement('table');
       table.innerHTML =
         '<thead><tr>' +
-        '<th>Application</th><th>Round</th><th>Grades</th><th>Assumptions</th><th>Flow</th><th>Actions</th>' +
+        '<th>Application</th><th>Round</th><th>Grades</th><th>Assumptions</th><th>Flow</th><th title="Whether MLflow turn/agent timing has been saved for this result">Timing</th><th>Actions</th>' +
         '</tr></thead>';
       const tbody = document.createElement('tbody');
       results.forEach((r, idx) => {
         const tr = document.createElement('tr');
         tr.className = 'clickable';
         enableRowKeyboardActivation(tr);
+        const hasTiming = !!r.turn_traces_json;
         tr.innerHTML =
           '<td>' + escapeHtml(r.application_name || '—') +
           '<div class="td-secondary">Conv #' + (r.conversation_no || r.conversation_id || '') + '</div></td>' +
           '<td>' + (r.round_no || '—') + '</td>' +
           '<td></td><td>' + scoreDisplay(r.assumptions_score) + '</td><td></td>' +
+          '<td><span class="timing-indicator ' + (hasTiming ? 'has-timing' : '') + '" title="' + (hasTiming ? 'Turn timing saved' : 'No turn timing saved yet') + '">' + ICON_CLOCK + '</span></td>' +
           '<td><button class="btn btn-xs btn-secondary drill-btn">Details</button></td>';
         const gradeCell = tr.cells[2];
         gradeCell.appendChild(statusBadge(r.grades_passed));

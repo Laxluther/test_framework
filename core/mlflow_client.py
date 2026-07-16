@@ -93,7 +93,12 @@ def get_traces_for_conversation(conversation_id, env_name="Local"):
                     "span_type": str(span.span_type) if span.span_type else "UNKNOWN",
                     "duration_ms": span_duration_ms,
                     "start_offset_ms": start_offset_ms,
-                    "status": str(span.status.status_code) if span.status else "UNSET",
+                    # .value, not str() — SpanStatusCode is an Enum whose default str()
+                    # is "SpanStatusCode.OK", not "OK", which silently broke every
+                    # downstream status comparison (both the raw trace view's error
+                    # styling and the turn-timing succeeded/failed check) into always
+                    # treating every span as non-OK regardless of its real status.
+                    "status": span.status.status_code.value if span.status else "UNSET",
                     "inputs": str(span.inputs)[:2000] if span.inputs is not None else "",
                     "outputs": str(span.outputs)[:2000] if span.outputs is not None else "",
                 })
